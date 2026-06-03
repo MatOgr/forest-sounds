@@ -1,0 +1,16 @@
+# Dev-only: makes this dir an import root so subpackages run without sys.path
+# hacks. NOT used by the Hugging Face Space (it runs app.py from this dir).
+#   uv pip install -e soundedge-esc-application
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soundedge-esc"
+version = "0"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+# App-root flat modules + the script subpackages, all anchored at this dir.
+py-modules = ["model", "preprocessing", "classes", "utils", "app"]
+packages = ["training", "compression", "custom_layers"]

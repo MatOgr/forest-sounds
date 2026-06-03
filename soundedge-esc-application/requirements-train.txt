@@ -1,0 +1,10 @@
+# Minimal runtime for training + optimization (no Streamlit app deps).
+# On a CUDA cloud box, install torch/torchaudio from the matching CUDA index first:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+# then: pip install -r requirements-train.txt
+torch
+torchaudio
+soundfile
+numpy
+typing_extensions
+wandb        # optional, only needed with --wandb

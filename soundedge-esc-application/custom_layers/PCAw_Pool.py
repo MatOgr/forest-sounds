@@ -3,12 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class PCAw_Pool(nn.Module):
-    def __init__(self, kernel_size, stride=(1, 1), eps: float = 1e-4, normalize_weights: bool = True):
+    def __init__(self, kernel_size, stride=(1, 1), eps: float = 1e-4,
+                 normalize_weights: bool = True, optimized: bool = True):
         super().__init__()
         self.kernel_size = kernel_size
         self.stride = stride
         self.eps = eps
         self.normalize_weights = normalize_weights
+        # optimized=True -> covariance eigh (fast); False -> original full SVD.
+        self.optimized = optimized
 
         # D = number of features per patch = F_k * T_k
         F_k, T_k = kernel_size
@@ -46,14 +49,11 @@ class PCAw_Pool(nn.Module):
         var = Xc.pow(2).mean(dim=1, keepdim=True)              # (B, 1, D)
         Xc = Xc / torch.sqrt(var + 1e-6)
 
-        # --------- Stable projection basis via SVD (more robust than eigh) ---------
-        # Xc = U S V^T  -> principal components are columns of V
-        # Use full_matrices=False for efficiency and stable backward
-        U, S, Vh = torch.linalg.svd(Xc, full_matrices=False)   # Vh: (B, D, D)
-        eigvecs = Vh.transpose(1, 2)                           # (B, D, D)
-
-        # Detach eigenvectors to avoid backprop through SVD
-        eigvecs = eigvecs.detach()
+        # Projection basis (eigenvectors of Xc, columns = components, descending).
+        if self.optimized:
+            eigvecs = self._basis_optimized(Xc)
+        else:
+            eigvecs = self._basis_svd(Xc)
 
         # Weighted projection direction v = E @ w
         if self.normalize_weights:
@@ -68,6 +68,40 @@ class PCAw_Pool(nn.Module):
         scores = torch.matmul(Xc, v.unsqueeze(-1)).squeeze(-1) # (B, N)
 
         return scores.view(B, C, H, W)
+
+    def _basis_svd(self, Xc: torch.Tensor) -> torch.Tensor:
+        """
+        Original path: principal components via full SVD of Xc.
+        Xc = U S V^T -> components are columns of V (descending). Robust but
+        materializes U (B, N, D) and runs SVD over the huge N dim -> slow.
+        """
+        # linalg is unstable/unsupported under fp16 -> force fp32, no autocast.
+        with torch.autocast(device_type=Xc.device.type, enabled=False):
+            Xcf = Xc.float()
+            U, S, Vh = torch.linalg.svd(Xcf, full_matrices=False)  # Vh: (B, D, D)
+            eigvecs = Vh.transpose(1, 2)                           # cols=comps, desc.
+        return eigvecs.detach().to(Xc.dtype)  # no backprop through decomposition
+
+    def _basis_optimized(self, Xc: torch.Tensor) -> torch.Tensor:
+        """
+        Fast path: right singular vectors of Xc == eigenvectors of (Xc^T Xc),
+        a tiny D x D matrix (D = F_k*T_k). Avoids materializing U (B, N, D) and
+        avoids SVD over the huge N dim -> ~40x speedup + big memory drop.
+
+        NOT bitwise-equal to the SVD path: eigvecs have an arbitrary per-column
+        sign/order convention, so the combined direction v differs. It is still
+        a valid PCA basis -> safe for training from scratch (weights adapt), but
+        do NOT mix with weights trained under the SVD path.
+        """
+        # linalg is unstable/unsupported under fp16 -> force fp32, no autocast.
+        with torch.autocast(device_type=Xc.device.type, enabled=False):
+            Xcf = Xc.float()
+            cov = torch.matmul(Xcf.transpose(1, 2), Xcf)       # (B, D, D)
+            # eigh: ascending eigenvalues, eigenvectors as columns. Flip to
+            # descending to match the SVD component ordering.
+            _, eigvecs = torch.linalg.eigh(cov)                # (B, D, D)
+            eigvecs = torch.flip(eigvecs, dims=[-1])           # cols=comps, desc.
+        return eigvecs.detach().to(Xc.dtype)
 
     def extra_repr(self) -> str:
         return (f"kernel_size={self.kernel_size}, stride={self.stride}, "

@@ -137,6 +137,43 @@ def rebuild_fc_after_pruning(model: nn.Module, example_input: torch.Tensor) -> N
     model.fc = nn.Linear(in_dim, old_out).to(device)
     model.train()
 
+def apply_asymmetric_pruning(model: nn.Module, amount: float = 0.1) -> nn.Module:
+    """
+    Paper-faithful ASYMMETRIC structured pruning for CNN_PCAw_SSRPMS_KAN.
+
+    Prunes ONLY conv1 + conv2 output channels (L1 magnitude), propagating each
+    cut into the next layer's input channels. conv3's OUTPUT channels are LEFT
+    UNTOUCHED so the flatten dim (-> fc -> KAN) stays fixed: the KAN classifier
+    interface and its trained spline grids are preserved, and `fc` is NOT reset.
+
+        conv1 out --prune--> conv2 in
+        conv2 out --prune--> conv3 in
+        conv3 out  ==  LOCKED (KAN frontier)
+
+    Meant to be called REPEATEDLY with a small `amount` (e.g. 0.1) between short
+    KD fine-tune rounds (iterative magnitude schedule), not as a one-shot cut.
+    """
+    device = next(model.parameters()).device
+
+    # conv1 out-channel prune (conv1[1]=Conv2d, conv1[2]=BN)
+    conv1_new, bn1_new, keep1 = prune_conv_bn_pair(model.conv1[1], model.conv1[2], amount)
+    model.conv1[1], model.conv1[2] = conv1_new, bn1_new
+
+    # conv2 in-channels follow conv1 kept outputs
+    model.conv2[1] = prune_conv_input_channels(model.conv2[1], keep1)
+
+    # conv2 out-channel prune
+    conv2_new, bn2_new, keep2 = prune_conv_bn_pair(model.conv2[1], model.conv2[2], amount)
+    model.conv2[1], model.conv2[2] = conv2_new, bn2_new
+
+    # conv3 in-channels follow conv2 kept outputs; conv3 OUTPUT stays = 256 (locked)
+    model.conv3[0] = prune_conv_input_channels(model.conv3[0], keep2)
+
+    # NOTE: deliberately no conv3 out-prune and no fc rebuild (KAN frontier constraint).
+    model.to(device)
+    return model
+
+
 def apply_structural_pruning(model: nn.Module, amount: float = 0.8, example_input: torch.Tensor = torch.randn(1, 1, 40, 862)) -> nn.Module:
     """
     Structural channel pruning for your CNN_PCAw_SSRPMS_KAN conv blocks.

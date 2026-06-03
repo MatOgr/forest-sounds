@@ -5,3 +5,4 @@ __pycache__/
 weights/
 stats/
 .vscode/
+wandb/
