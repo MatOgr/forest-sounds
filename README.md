@@ -6,8 +6,11 @@ forest-sounds/
   ├── models/    ← save checkpoints
   ├── figures/   ← export plots
   ├── utils/     ← helper modules
-  └── sound_classification_report.ipynb
+  ├── sound_classification_report.ipynb
+  └── soundedge-esc-application   ← huggingface space + added training scripts
 ```
+
+[PasanSarathchandra/soundedge-esc-application](https://huggingface.co/spaces/PasanSarathchandra/soundedge-esc-application/tree/main)
 
 ### Utils
 
