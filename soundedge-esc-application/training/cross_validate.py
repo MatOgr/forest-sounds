@@ -21,7 +21,6 @@ Run (from soundedge-esc-application/):
         -- --batch-size 32 --num-workers 8        # args after `--` are forwarded to train.py
 """
 
-import argparse
 import json
 import os
 import subprocess
@@ -29,6 +28,8 @@ import sys
 from dataclasses import dataclass
 
 import torch
+
+from .args import SplitArgs
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _APP = os.path.dirname(_HERE)  # soundedge-esc-application/ (cwd for `-m training.*`)
@@ -60,39 +61,13 @@ class Splits:
         )
 
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--csv", required=True)
-    p.add_argument("--audio-dir", required=True)
-    p.add_argument("--epochs", type=int, default=300)
-    p.add_argument(
-        "--out-dir", default="weights/cv", help="per-fold checkpoints + metrics"
-    )
-    p.add_argument(
-        "--folds",
-        type=int,
-        nargs="+",
-        default=ALL_FOLDS,
-        help="which folds to use as the test fold (default: all 5)",
-    )
-    p.add_argument(
-        "--wandb",
-        action="store_true",
-        help="log each fold to W&B as a separate run (testfold{N})",
-    )
-    p.add_argument("--wandb-project", default="fsc22-esc-cv")
-    # Everything after a literal `--` is forwarded verbatim to train.py.
-    p.add_argument("forward", nargs=argparse.REMAINDER)
-    return p.parse_args()
-
-
 def val_for(test_fold: int) -> int:
     """Rotating neighbour: 1->2, 2->3, ..., 5->1."""
     return ALL_FOLDS[test_fold % len(ALL_FOLDS)]
 
 
 def main():
-    args = parse_args()
+    args = SplitArgs.parse_args()
     os.makedirs(os.path.join(_APP, args.out_dir), exist_ok=True)
     # Strip a leading '--' separator if argparse left it in REMAINDER.
     forward = args.forward[1:] if args.forward[:1] == ["--"] else args.forward

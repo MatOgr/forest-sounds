@@ -6,3 +6,4 @@ weights/
 stats/
 .vscode/
 wandb/
+*.egg-info

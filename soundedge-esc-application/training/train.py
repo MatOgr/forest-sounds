@@ -18,10 +18,11 @@ import resource  # peak-RSS diagnostics (Unix only)
 
 import torch
 import torch.nn as nn
-from debugpy.server.cli import parse_args
 from model import CNN_PCAw_SSRPMS_KAN
 from preprocessing import NormalizeMeanStd
 from torch.utils.data import DataLoader
+
+from .args import TrainArgs
 
 # Siblings: relative (this is the `training` package). App-root modules
 # (model, preprocessing): absolute, resolved via the editable install.
@@ -337,7 +338,7 @@ def write_metrics(args, splits, best_acc, best_epoch, test_acc, num_classes) -> 
 
 # --------------------------------------------------------------------------- #
 def main() -> None:
-    args = parse_args()
+    args = TrainArgs.parse_args()
     log.info("args: %s", vars(args))
 
     device_type = "cuda" if str(args.device).startswith("cuda") else "cpu"
