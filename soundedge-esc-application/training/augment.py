@@ -1,4 +1,5 @@
 """Waveform- and spectrogram-level augmentations per FSC22 training spec."""
+
 import torch
 import torch.nn as nn
 import torchaudio.transforms as T
@@ -41,7 +42,9 @@ class WaveformAugment(nn.Module):
             }
         )
         slo, shi = stretch_range
-        rates = [round(r, 2) for r in (slo, (slo + shi) / 2, shi) if abs(r - 1.0) > 1e-3]
+        rates = [
+            round(r, 2) for r in (slo, (slo + shi) / 2, shi) if abs(r - 1.0) > 1e-3
+        ]
         # ModuleDict keys can't contain "." -> use index keys "0","1",...
         self._resamplers = nn.ModuleDict(
             {

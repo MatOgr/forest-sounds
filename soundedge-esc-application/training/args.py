@@ -68,6 +68,7 @@ class TrainArgs(DataclassArgs):
         },
     )
     epochs: int = 300
+    seed: int = field(default=42, metadata={"help": "RNG seed (torch/numpy/random)"})
     batch_size: int = 4  # PCAw SVD is VRAM-heavy
     accum_steps: int = 8  # 4*8 = effective batch 32
     lr: float = 1e-3
@@ -105,6 +106,7 @@ class SplitArgs(DataclassArgs):
         default="weights/cv", metadata={"help": "per-fold checkpoints + metrics"}
     )
     epochs: int = 300
+    seed: int = field(default=42, metadata={"help": "RNG seed forwarded to train.py"})
     folds: list = field(
         default_factory=lambda: [1, 2, 3, 4, 5],
         metadata={

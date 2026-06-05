@@ -14,8 +14,10 @@ Run (from soundedge-esc-application/):
 import json
 import logging
 import os
+import random
 import resource  # peak-RSS diagnostics (Unix only)
 
+import numpy as np
 import torch
 import torch.nn as nn
 from model import CNN_PCAw_SSRPMS_KAN
@@ -37,6 +39,28 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("fsc22.train")
+
+
+def seed_everything(seed: int) -> torch.Generator:
+    """Seed python/numpy/torch global RNGs. Returns a torch.Generator seeded
+    the same way for the DataLoader's shuffle (so epoch order is reproducible).
+    Per-worker augment RNG is reseeded in `_worker_init` from this base seed."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    g = torch.Generator()
+    g.manual_seed(seed)
+    return g
+
+
+def _worker_init(worker_id: int) -> None:
+    """Give each DataLoader worker a distinct-but-deterministic seed so the
+    in-Dataset augmentations (torch global RNG) don't collide across workers
+    yet stay reproducible run-to-run."""
+    base = torch.initial_seed() % 2**32  # base+worker_id, set by DataLoader
+    random.seed(base)
+    np.random.seed(base)
 
 
 def resolve_stats_path(stats: str, val_fold: int, test_fold: int | None) -> str:
@@ -173,9 +197,17 @@ def build_loaders(
         pin_memory=(device_type == "cuda"),  # faster host->GPU copies
         persistent_workers=args.num_workers > 0,  # don't respawn workers each epoch
         prefetch_factor=4 if args.num_workers > 0 else None,
+        worker_init_fn=_worker_init if args.num_workers > 0 else None,
     )
+    # Seeded generator -> reproducible shuffle order each epoch.
+    shuffle_gen = torch.Generator().manual_seed(args.seed)
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, drop_last=True, **loader_kw
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=True,
+        generator=shuffle_gen,
+        **loader_kw,
     )
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False, **loader_kw
@@ -340,6 +372,8 @@ def write_metrics(args, splits, best_acc, best_epoch, test_acc, num_classes) -> 
 def main() -> None:
     args = TrainArgs.parse_args()
     log.info("args: %s", vars(args))
+    seed_everything(args.seed)
+    log.info("seed=%d", args.seed)
 
     device_type = "cuda" if str(args.device).startswith("cuda") else "cpu"
     device = torch.device(args.device)

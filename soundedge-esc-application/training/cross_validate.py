@@ -90,6 +90,8 @@ def main():
             str(test_fold),
             "--epochs",
             str(args.epochs),
+            "--seed",
+            str(args.seed),
             "--out",
             out,
             *forward,
