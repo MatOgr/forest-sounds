@@ -4,10 +4,10 @@ Post-training optimization for CNN_PCAw_SSRPMS_KAN (FSC22).
 Pipeline:  prune  ->  KD recover  ->  QAT fine-tune  ->  convert int8
 
 Why this order:
-  apply_structural_pruning() rebuilds `fc` with RANDOM weights (flatten dim
-  changes after channel pruning), so the pruned net is broken until retrained.
-  Knowledge distillation from the full trained teacher recovers accuracy, then
-  QAT fine-tunes the (conv3 + fc) int8 blocks before the final convert.
+    apply_structural_pruning() rebuilds `fc` with RANDOM weights (flatten dim
+    changes after channel pruning), so the pruned net is broken until retrained.
+    Knowledge distillation from the full trained teacher recovers accuracy, then
+    QAT fine-tunes the (conv3 + fc) int8 blocks before the final convert.
 
 Run (from soundedge-esc-application/):
     python -m compression.optimize \
@@ -22,7 +22,6 @@ Quick wiring check (no data needed):
     python -m compression.optimize --smoke
 """
 
-import argparse
 import copy
 import json
 import logging
@@ -31,14 +30,15 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from model import CNN_PCAw_SSRPMS_KAN
+from preprocessing import NormalizeMeanStd
 from torch.utils.data import DataLoader
 
 # Siblings: relative (this is the `compression` package). App-root modules
 # (model, preprocessing): absolute, resolved via the editable install.
-from .pruning import apply_asymmetric_pruning, apply_structural_pruning
+from .args import OptimizationArgs, parse_args
+from .pruning import apply_structural_pruning
 from .qat import convert_qat_model, prepare_qat_model
-from model import CNN_PCAw_SSRPMS_KAN
-from preprocessing import NormalizeMeanStd
 
 logging.basicConfig(
     level=logging.INFO,
@@ -132,20 +132,12 @@ def train_distill(
             seen += x.size(0)
         sched.step()
         acc = evaluate(student, val_loader, device)
+        loss = run / max(seen, 1)
         log.info(
-            "[%s] epoch %d/%d  loss=%.4f  val_acc=%.3f",
-            tag,
-            ep + 1,
-            epochs,
-            run / max(seen, 1),
-            acc,
+            "[%s] epoch %d/%d  loss=%.4f  val_acc=%.3f", tag, ep + 1, epochs, loss, acc
         )
         if wb is not None:
-            wb.log({
-                f"{tag}/loss": run / max(seen, 1),
-                f"{tag}/val_acc": acc,
-                f"{tag}/epoch": ep + 1,
-            })
+            wb.log({f"{tag}/loss": loss, f"{tag}/val_acc": acc, f"{tag}/epoch": ep + 1})
         if acc > best_acc:
             best_acc, best_state = acc, copy.deepcopy(student.state_dict())
             if save_path:
@@ -244,76 +236,55 @@ def build_smoke_loaders(num_classes=27, n=16, batch=4):
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--csv")
-    p.add_argument("--audio-dir")
-    p.add_argument("--weights", default="weights/fsc22_model.pth")
-    p.add_argument("--stats", default="../stats/fsc22_mel_stats.json")
-    p.add_argument("--recompute-stats", action="store_true")
-    p.add_argument("--val-fold", type=int, default=5)
-    p.add_argument(
-        "--test-fold",
-        type=int,
-        default=0,
-        help="held-out fold for an unbiased final estimate (0=disabled). Excluded "
-        "from train AND val/KD/QAT selection; every stage is scored on it once.",
+
+
+def iterative_pruning_and_rewind(
+    args: OptimizationArgs,
+    student,
+    teacher,
+    train_loader,
+    val_loader,
+    device,
+    wb: "wandb.Run | None" = None,
+):
+    # Iterative magnitude schedule: small asymmetric cut + brief KD rewind,
+    # repeated. conv3 out + fc + KAN stay fixed (KAN frontier constraint).
+    log.info(
+        "PAPER-MODE: iterative structural prune (step=%.2f, rounds<=%d, "
+        "target=%s, rewind=%dep)",
+        args.prune_step,
+        args.prune_rounds,
+        args.target_params or "off",
+        args.rewind_epochs,
     )
-    p.add_argument(
-        "--prune-amount",
-        type=float,
-        default=0.5,
-        help="one-shot prune fraction (ignored in --paper-mode)",
+    for r in range(args.prune_rounds):
+        if args.target_params and count_params(student) <= args.target_params:
+            log.info("reached target params (%d) -> stop pruning", args.target_params)
+            break
+        student = (
+            apply_structural_pruning(  # TODO: test the `apply_asymmetric_pruning``
+                student,
+                amount=args.prune_step,
+            ).to(device)
+        )
+        log.info("  round %d: params=%d", r + 1, count_params(student))
+        student, _ = train_distill(
+            student,
+            teacher,
+            train_loader,
+            val_loader,
+            epochs=args.rewind_epochs,
+            lr=args.lr,
+            device=device,
+            temperature=args.temperature,
+            alpha=args.alpha,
+            tag=f"rewind{r + 1}",
+            save_path=None,
+            wb=wb,
+        )
+    log.info(
+        f"PRUNED   params={count_params(student)}  (iterative, conv3/fc/KAN intact)"
     )
-    p.add_argument(
-        "--paper-mode",
-        action="store_true",
-        help="iterative asymmetric prune (conv1/conv2 only, conv3+KAN locked)",
-    )
-    p.add_argument(
-        "--prune-step",
-        type=float,
-        default=0.1,
-        help="paper-mode: fraction of CURRENT channels pruned per round",
-    )
-    p.add_argument(
-        "--prune-rounds",
-        type=int,
-        default=8,
-        help="paper-mode: max iterative prune+rewind rounds",
-    )
-    p.add_argument(
-        "--target-params",
-        type=int,
-        default=0,
-        help="paper-mode: stop early once params <= this (0=disabled)",
-    )
-    p.add_argument(
-        "--rewind-epochs",
-        type=int,
-        default=2,
-        help="paper-mode: KD fine-tune epochs per prune round",
-    )
-    p.add_argument("--kd-epochs", type=int, default=50)
-    p.add_argument("--qat-epochs", type=int, default=15)
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--qat-lr", type=float, default=1e-4)
-    p.add_argument("--temperature", type=float, default=3.0)
-    p.add_argument("--alpha", type=float, default=0.4, help="CE weight in KD loss")
-    p.add_argument("--batch-size", type=int, default=32)
-    p.add_argument("--num-workers", type=int, default=8)
-    p.add_argument("--qat-backend", default="fbgemm")
-    p.add_argument("--out-dir", default="weights")
-    p.add_argument(
-        "--smoke",
-        action="store_true",
-        help="tiny random-data run to verify wiring (no audio needed)",
-    )
-    p.add_argument("--wandb", action="store_true", help="log to Weights & Biases")
-    p.add_argument("--wandb-project", default="fsc22-optimize")
-    p.add_argument("--wandb-run", default=None, help="run name (default: auto)")
-    p.add_argument("--wandb-entity", default=None)
-    return p.parse_args()
 
 
 def main():
@@ -322,17 +293,17 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     log.info("device=%s  smoke=%s", device, args.smoke)
 
-    wb = None
+    wb: "wandb.Run | None" = None
     if args.wandb:
         import wandb
 
-        wandb.init(
+        wb = wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
             name=args.wandb_run,
             config=vars(args),
         )
-        wb = wandb
+        # wb = wandb
 
     # ---- data ----
     if args.smoke:
@@ -344,8 +315,6 @@ def main():
             raise SystemExit("--csv and --audio-dir required (or use --smoke)")
         train_loader, val_loader, test_loader, num_classes = build_loaders(args)
     log.info("num_classes=%d  test_fold=%s", num_classes, args.test_fold or None)
-
-    cpu = torch.device("cpu")
 
     def test_acc(model, dev=device):
         """Held-out test accuracy (None if no test fold)."""
@@ -368,43 +337,8 @@ def main():
     # ---- STAGE 1: structured channel pruning ----
     student = copy.deepcopy(teacher)
     if args.paper_mode:
-        # Iterative magnitude schedule: small asymmetric cut + brief KD rewind,
-        # repeated. conv3 out + fc + KAN stay fixed (KAN frontier constraint).
-        log.info(
-            "PAPER-MODE: iterative asymmetric prune (step=%.2f, rounds<=%d, "
-            "target=%s, rewind=%dep)",
-            args.prune_step,
-            args.prune_rounds,
-            args.target_params or "off",
-            args.rewind_epochs,
-        )
-        for r in range(args.prune_rounds):
-            if args.target_params and count_params(student) <= args.target_params:
-                log.info(
-                    "reached target params (%d) -> stop pruning", args.target_params
-                )
-                break
-            student = apply_asymmetric_pruning(student, amount=args.prune_step).to(
-                device
-            )
-            log.info("  round %d: params=%d", r + 1, count_params(student))
-            student, _ = train_distill(
-                student,
-                teacher,
-                train_loader,
-                val_loader,
-                epochs=args.rewind_epochs,
-                lr=args.lr,
-                device=device,
-                temperature=args.temperature,
-                alpha=args.alpha,
-                tag=f"rewind{r + 1}",
-                save_path=None,
-                wb=wb,
-            )
-        log.info(
-            "PRUNED   params=%d  (asymmetric, conv3/fc/KAN intact)",
-            count_params(student),
+        iterative_pruning_and_rewind(
+            args, student, teacher, train_loader, val_loader, device, wb
         )
     else:
         example_input = torch.randn(*EXAMPLE_INPUT)
@@ -458,7 +392,7 @@ def main():
 
     # ---- STAGE 4: convert -> int8 (CPU) ----
     int8_model = convert_qat_model(qat_model, backend=args.qat_backend)  # -> cpu
-    int8_acc = evaluate(int8_model, val_loader, cpu)
+    int8_acc = evaluate(int8_model, val_loader, torch.device("cpu"))
     int8_path = os.path.join(args.out_dir, "fsc22_model_optimized_int8.pth")
     torch.save(int8_model, int8_path)  # full object: quantized modules need the graph
     try:
@@ -470,8 +404,7 @@ def main():
     # ---- held-out test eval (each stage scored ONCE on the untouched test fold) ----
     teacher_test = test_acc(teacher)
     kd_test = test_acc(student)
-    int8_test = test_acc(int8_model, cpu)
-
+    int8_test = test_acc(int8_model, torch.device("cpu"))
     # ---- summary ----
     log.info("=" * 72)
     log.info("SUMMARY  (test_fold=%s)", args.test_fold or "none")
@@ -499,45 +432,39 @@ def main():
     )
     log.info("=" * 72)
 
-    with open(
-        os.path.join(args.out_dir, "optimize_metrics.json"), "w", encoding="utf-8"
-    ) as f:
-        json.dump(
-            {
-                "val_fold": args.val_fold,
-                "test_fold": args.test_fold or None,
-                "paper_mode": args.paper_mode,
-                "teacher": {
-                    "params": count_params(teacher),
-                    "val_acc": base_acc,
-                    "test_acc": teacher_test,
-                },
-                "pruned_kd_fp32": {
-                    "params": count_params(student),
-                    "val_acc": kd_acc,
-                    "test_acc": kd_test,
-                },
-                "qat_val_acc": qat_acc,
-                "int8": {
-                    "val_acc": int8_acc,
-                    "test_acc": int8_test,
-                    "size_mb": file_size_mb(int8_path),
-                },
-            },
-            f,
-            indent=2,
-        )
+    metrics_summary = {
+        "val_fold": args.val_fold,
+        "test_fold": args.test_fold or None,
+        "paper_mode": args.paper_mode,
+        "teacher": {
+            "params": count_params(teacher),
+            "val_acc": base_acc,
+            "test_acc": teacher_test,
+        },
+        "pruned_kd": {
+            "params": count_params(student),
+            "val_acc": kd_acc,
+            "test_acc": kd_test,
+        },
+        "qat": {"val_acc": qat_acc},
+        "int8": {
+            "val_acc": int8_acc,
+            "test_acc": int8_test,
+            "size_mb": file_size_mb(int8_path),
+        },
+    }
+
+    with open(args.out_dir + "/optimize_metrics.json", "w", encoding="utf-8") as f:
+        json.dump(metrics_summary, f, indent=2)
 
     if wb is not None:
-        wb.run.summary.update({
-            "teacher/params": count_params(teacher),
-            "teacher/val_acc": base_acc, "teacher/test_acc": teacher_test,
-            "pruned_kd/params": count_params(student),
-            "pruned_kd/val_acc": kd_acc, "pruned_kd/test_acc": kd_test,
-            "qat/val_acc": qat_acc,
-            "int8/val_acc": int8_acc, "int8/test_acc": int8_test,
-            "int8/size_mb": file_size_mb(int8_path),
-        })
+        summary = {
+            f"{key}/{subkey}": subvalue
+            for key, value in metrics_summary.items()
+            if isinstance(value, dict)
+            for subkey, subvalue in value.items()
+        }
+        wb.summary.update(summary)
         wb.finish()
 
 

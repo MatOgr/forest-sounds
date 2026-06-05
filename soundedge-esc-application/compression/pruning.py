@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+
 def _make_pruned_conv(old_conv: nn.Conv2d, keep_out_idx: torch.Tensor) -> nn.Conv2d:
     """
     Create a new Conv2d with fewer output channels (keep_out_idx),
@@ -137,8 +138,11 @@ def rebuild_fc_after_pruning(model: nn.Module, example_input: torch.Tensor) -> N
     model.fc = nn.Linear(in_dim, old_out).to(device)
     model.train()
 
+
 def apply_asymmetric_pruning(model: nn.Module, amount: float = 0.1) -> nn.Module:
     """
+    CUSTOM IMPLEMENTATION.
+
     Paper-faithful ASYMMETRIC structured pruning for CNN_PCAw_SSRPMS_KAN.
 
     Prunes ONLY conv1 + conv2 output channels (L1 magnitude), propagating each
@@ -156,14 +160,18 @@ def apply_asymmetric_pruning(model: nn.Module, amount: float = 0.1) -> nn.Module
     device = next(model.parameters()).device
 
     # conv1 out-channel prune (conv1[1]=Conv2d, conv1[2]=BN)
-    conv1_new, bn1_new, keep1 = prune_conv_bn_pair(model.conv1[1], model.conv1[2], amount)
+    conv1_new, bn1_new, keep1 = prune_conv_bn_pair(
+        model.conv1[1], model.conv1[2], amount
+    )
     model.conv1[1], model.conv1[2] = conv1_new, bn1_new
 
     # conv2 in-channels follow conv1 kept outputs
     model.conv2[1] = prune_conv_input_channels(model.conv2[1], keep1)
 
     # conv2 out-channel prune
-    conv2_new, bn2_new, keep2 = prune_conv_bn_pair(model.conv2[1], model.conv2[2], amount)
+    conv2_new, bn2_new, keep2 = prune_conv_bn_pair(
+        model.conv2[1], model.conv2[2], amount
+    )
     model.conv2[1], model.conv2[2] = conv2_new, bn2_new
 
     # conv3 in-channels follow conv2 kept outputs; conv3 OUTPUT stays = 256 (locked)
@@ -174,7 +182,11 @@ def apply_asymmetric_pruning(model: nn.Module, amount: float = 0.1) -> nn.Module
     return model
 
 
-def apply_structural_pruning(model: nn.Module, amount: float = 0.8, example_input: torch.Tensor = torch.randn(1, 1, 40, 862)) -> nn.Module:
+def apply_structural_pruning(
+    model: nn.Module,
+    amount: float = 0.8,
+    example_input: torch.Tensor = torch.randn(1, 1, 40, 862),
+) -> nn.Module:
     """
     Structural channel pruning for your CNN_PCAw_SSRPMS_KAN conv blocks.
 
@@ -186,36 +198,47 @@ def apply_structural_pruning(model: nn.Module, amount: float = 0.8, example_inpu
     example_input should be shaped like your model input, e.g. (1, 1, F, T)
     """
     device = next(model.parameters()).device
-
     # ---- conv1 prune (conv1[1] is Conv2d, conv1[2] is BN) ----
-    conv1_old = model.conv1[1]
-    bn1_old = model.conv1[2]
-    conv1_new, bn1_new, keep1 = prune_conv_bn_pair(conv1_old, bn1_old, amount)
+    conv1_old = model.conv1[1]  # ty:ignore[not-subscriptable]
+    bn1_old = model.conv1[2]  # ty:ignore[not-subscriptable]
+    conv1_new, bn1_new, keep1 = prune_conv_bn_pair(
+        conv1_old,  # ty:ignore[invalid-argument-type]
+        bn1_old,  # ty:ignore[invalid-argument-type]
+        amount,
+    )
 
-    model.conv1[1] = conv1_new
-    model.conv1[2] = bn1_new
+    model.conv1[1] = conv1_new  # ty:ignore[invalid-assignment]
+    model.conv1[2] = bn1_new  # ty:ignore[invalid-assignment]
 
     # ---- conv2 input prune to match conv1 kept outputs ----
-    model.conv2[1] = prune_conv_input_channels(model.conv2[1], keep1)
+    model.conv2[1] = prune_conv_input_channels(model.conv2[1], keep1)  # ty:ignore[invalid-assignment, invalid-argument-type, not-subscriptable]
 
     # ---- conv2 prune ----
-    conv2_old = model.conv2[1]
-    bn2_old = model.conv2[2]
-    conv2_new, bn2_new, keep2 = prune_conv_bn_pair(conv2_old, bn2_old, amount)
+    conv2_old = model.conv2[1]  # ty:ignore[not-subscriptable]
+    bn2_old = model.conv2[2]  # ty:ignore[not-subscriptable]
+    conv2_new, bn2_new, keep2 = prune_conv_bn_pair(
+        conv2_old,  # ty:ignore[invalid-argument-type]
+        bn2_old,  # ty:ignore[invalid-argument-type]
+        amount,
+    )
 
-    model.conv2[1] = conv2_new
-    model.conv2[2] = bn2_new
+    model.conv2[1] = conv2_new  # ty:ignore[invalid-assignment]
+    model.conv2[2] = bn2_new  # ty:ignore[invalid-assignment]
 
     # ---- conv3 input prune to match conv2 kept outputs ----
-    model.conv3[0] = prune_conv_input_channels(model.conv3[0], keep2)
+    model.conv3[0] = prune_conv_input_channels(model.conv3[0], keep2)  # ty:ignore[invalid-assignment, invalid-argument-type, not-subscriptable]
 
     # ---- conv3 prune ----
-    conv3_old = model.conv3[0]
-    bn3_old = model.conv3[1]
-    conv3_new, bn3_new, keep3 = prune_conv_bn_pair(conv3_old, bn3_old, amount)
+    conv3_old = model.conv3[0]  # ty:ignore[not-subscriptable]
+    bn3_old = model.conv3[1]  # ty:ignore[not-subscriptable]
+    conv3_new, bn3_new, keep3 = prune_conv_bn_pair(
+        conv3_old,  # ty:ignore[invalid-argument-type]
+        bn3_old,  # ty:ignore[invalid-argument-type]
+        amount,
+    )
 
-    model.conv3[0] = conv3_new
-    model.conv3[1] = bn3_new
+    model.conv3[0] = conv3_new  # ty:ignore[invalid-assignment]
+    model.conv3[1] = bn3_new  # ty:ignore[invalid-assignment]
 
     # Ensure the whole model stays on the same device
     model.to(device)

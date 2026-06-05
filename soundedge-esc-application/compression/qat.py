@@ -1,7 +1,8 @@
 import copy
+
 import torch
-import torch.nn as nn
 import torch.ao.quantization as tq
+import torch.nn as nn
 
 
 class CNN_PSK_QATWrapper(nn.Module):
@@ -14,6 +15,7 @@ class CNN_PSK_QATWrapper(nn.Module):
         self.dequant_after_fc = tq.DeQuantStub()
 
     def forward(self, x):
+        # fmt: off
         x = self.m.conv1(x)          # float
         x = self.m.conv2(x)          # float
 
@@ -29,6 +31,7 @@ class CNN_PSK_QATWrapper(nn.Module):
         x = self.dequant_after_fc(x)
 
         x = self.m.kan(x)            # float
+        # fmt: on
         return x
 
 
@@ -62,13 +65,13 @@ def _fuse_conv_bn_relu_for_qat(base: nn.Module):
     if was_training:
         base.train()
 
+
 def get_qat_qconfig_compatible(backend: str = "fbgemm"):
     """
     QAT config compatible with eager-mode convert() for Conv/Linear:
-      - Activations: quint8 per-tensor affine
-      - Weights: qint8 per-channel symmetric (supported by quantized conv/linear)
+        - Activations: quint8 per-tensor affine
+        - Weights: qint8 per-channel symmetric (supported by quantized conv/linear)
     """
-    backend = _get_available_backend(backend)
 
     act_fq = tq.FusedMovingAvgObsFakeQuantize.with_args(
         observer=tq.MovingAverageMinMaxObserver,
@@ -82,7 +85,7 @@ def get_qat_qconfig_compatible(backend: str = "fbgemm"):
     weight_fq = tq.FusedMovingAvgObsFakeQuantize.with_args(
         observer=tq.MovingAveragePerChannelMinMaxObserver,
         dtype=torch.qint8,
-        qscheme=torch.per_channel_symmetric,   # key change
+        qscheme=torch.per_channel_symmetric,  # key change
         quant_min=-128,
         quant_max=127,
         reduce_range=False,
@@ -108,7 +111,9 @@ def prepare_qat_model(
     qat_wrapped = CNN_PSK_QATWrapper(base)
 
     # 3) Attach QAT qconfig
-    qat_wrapped.qconfig = tq.get_default_qat_qconfig(backend)  # backend already resolved
+    qat_wrapped.qconfig = tq.get_default_qat_qconfig(
+        backend,
+    )  # backend already resolved
 
     # Keep custom / unsupported parts in float
     qat_wrapped.m.conv1.qconfig = None

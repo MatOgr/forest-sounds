@@ -8,8 +8,7 @@ class WandbLogger:
             return
         import wandb
 
-        self._wandb = wandb
-        wandb.init(
+        self._wandb = wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
             name=args.wandb_run,
@@ -24,7 +23,7 @@ class WandbLogger:
         if self.enabled:
             for k, v in kv.items():
                 if v is not None:
-                    self._wandb.run.summary[k] = v
+                    self._wandb.summary[k] = v
 
     def finish(self):
         if self.enabled:
