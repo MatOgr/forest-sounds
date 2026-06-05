@@ -283,7 +283,7 @@ def iterative_pruning_and_rewind(
             wb=wb,
         )
     log.info(
-        f"PRUNED   params={count_params(student)}  (iterative, conv3/fc/KAN intact)"
+        f"PRUNED & REWINDED  params={count_params(student)}  (iterative, conv3/fc/KAN intact)"
     )
 
 
