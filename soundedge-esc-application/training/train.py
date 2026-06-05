@@ -11,7 +11,6 @@ Run (from soundedge-esc-application/):
         --val-fold 5 --epochs 300 --out weights/fsc22_model.pth
 """
 
-import argparse
 import json
 import logging
 import os
@@ -19,6 +18,7 @@ import resource  # peak-RSS diagnostics (Unix only)
 
 import torch
 import torch.nn as nn
+from debugpy.server.cli import parse_args
 from model import CNN_PCAw_SSRPMS_KAN
 from preprocessing import NormalizeMeanStd
 from torch.utils.data import DataLoader
@@ -36,43 +36,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("fsc22.train")
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
-    p.add_argument("--csv", required=True)
-    p.add_argument("--audio-dir", required=True, help="dir holding FSC22 .wav files")
-    p.add_argument("--val-fold", type=int, default=5)
-    p.add_argument(
-        "--test-fold",
-        type=int,
-        default=0,
-        help="held-out fold evaluated ONCE after training (0=disabled). "
-        "Excluded from train AND val to keep the test estimate unbiased.",
-    )
-    p.add_argument("--epochs", type=int, default=300)
-    p.add_argument("--batch-size", type=int, default=4)  # PCAw SVD is VRAM-heavy
-    p.add_argument("--accum-steps", type=int, default=8)  # 4*8 = effective batch 32
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--weight-decay", type=float, default=1e-4)
-    p.add_argument("--mixup-alpha", type=float, default=0.2)
-    p.add_argument("--patience", type=int, default=100)
-    p.add_argument("--amp", action="store_true", help="mixed precision (cuda only)")
-    p.add_argument("--num-workers", type=int, default=8)
-    p.add_argument("--out", default="weights/fsc22_model.pth")
-    p.add_argument(
-        "--stats",
-        default="",
-        help="mel mean/std cache. Empty -> auto path: per-split when --test-fold "
-        "set (no cross-split leakage), else stats/fsc22_mel_stats.json.",
-    )
-    p.add_argument("--recompute-stats", action="store_true")
-    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--wandb", action="store_true", help="log to Weights & Biases")
-    p.add_argument("--wandb-project", default="fsc22-esc")
-    p.add_argument("--wandb-run", default=None, help="run name (default: auto)")
-    p.add_argument("--wandb-entity", default=None)
-    return p.parse_args()
 
 
 def resolve_stats_path(stats: str, val_fold: int, test_fold: int | None) -> str:
