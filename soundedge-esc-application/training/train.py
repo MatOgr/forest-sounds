@@ -37,7 +37,6 @@ from .fsc22_dataset import (
     compute_train_stats,
     precompute_mel_cache,
 )
-from .gpu_mel import FSC22WaveformDataset, GPUMelFrontend
 from .wnb import WandbLogger
 
 logging.basicConfig(
@@ -124,7 +123,6 @@ def run_epoch(
     train,
     scaler: torch.amp.GradScaler,
     accum_steps=1,
-    frontend=None,
 ) -> tuple[float, float]:
     phase = "train" if train else "val"
     use_amp = scaler.is_enabled()
@@ -137,11 +135,6 @@ def run_epoch(
     for bi, (x, y) in enumerate(loader):
         try:
             x, y = x.to(device), y.to(device)
-            # GPU mel: loader yields raw waveform -> features here, on-device.
-            # Kept outside autocast (mel/linalg want fp32; matches model's
-            # internal fp32-forced PCAw path).
-            if frontend is not None:
-                x = frontend(x, train=train)
             if bi == 0:
                 _log_batch_diag(phase, x, y, device, use_amp)
 
@@ -229,8 +222,7 @@ def build_loaders(
     args, splits, id_to_idx, norm, device_type, mel_cfg: MelConfig, chan_norm=None
 ) -> tuple[DataLoader, DataLoader, DataLoader | None]:
     log.info("STAGE: build datasets / loaders")
-    # GPU mel: workers return raw waveform, mel/aug done on-device per batch.
-    DS = FSC22WaveformDataset if args.gpu_mel else FSC22Dataset
+    DS = FSC22Dataset
     # 3-channel features only for the _DDD model; flags are inert otherwise.
     ddd_kw = dict(
         derivatives=args.model.endswith("_DDD"),
@@ -238,18 +230,13 @@ def build_loaders(
         channel_norm=args.channel_norm,
         chan_norm=chan_norm,
         mel_cfg=mel_cfg,
-        # cache is CPU-side; the GPU path computes mel fresh per batch.
-        cache_dir=None if args.gpu_mel else (args.mel_cache_dir or None),
+        cache_dir=args.mel_cache_dir or None,
     )
-    # Augment lives in the dataset for the CPU path; in the GPU path the
-    # GPUMelFrontend owns it (built in main), so pass none to the dataset.
-    train_aug = (
-        {}
-        if args.gpu_mel
-        else dict(
-            wave_aug=WaveformAugment(sample_rate=mel_cfg.sample_rate),
-            spec_aug=SpecAugment(),
-        )
+    # Augment lives in the dataset (CPU path). wave_aug is pre-mel; spec_aug
+    # post-mel. Under --mel-cache-dir, wave_aug is bypassed unless --aug-variants.
+    train_aug = dict(
+        wave_aug=WaveformAugment(sample_rate=mel_cfg.sample_rate),
+        spec_aug=SpecAugment(),
     )
     train_ds = DS(
         args.csv,
@@ -362,7 +349,6 @@ def train_model(
     device,
     class_names,
     wandb_logger,
-    frontend=None,
 ) -> tuple[float, int]:
     train_loader, val_loader, _ = loaders
     best_acc, best_epoch, wait = 0.0, -1, 0
@@ -379,7 +365,6 @@ def train_model(
             True,
             accum_steps=args.accum_steps,
             scaler=scaler,
-            frontend=frontend,
         )
         val_loss, val_acc = run_epoch(
             model,
@@ -390,7 +375,6 @@ def train_model(
             0.0,
             False,
             scaler=scaler,
-            frontend=frontend,
         )
         scheduler.step()
         lr = scheduler.get_last_lr()[0]
@@ -429,7 +413,6 @@ def train_model(
 
 def evaluate_test(
     args, model, test_loader, criterion, optimizer, scaler, device, test_fold,
-    frontend=None,
 ) -> float | None:
     """One-shot held-out test eval (unbiased: test fold never trained/selected on)."""
     if test_loader is None:
@@ -441,7 +424,6 @@ def evaluate_test(
         log.warning("no checkpoint at %s; testing last-epoch weights", args.out)
     _, test_acc = run_epoch(
         model, test_loader, criterion, optimizer, device, 0.0, False, scaler=scaler,
-        frontend=frontend,
     )
     print(f"TEST fold={test_fold}  test_acc={test_acc:.3f}")
     return test_acc
@@ -502,12 +484,8 @@ def main() -> None:
         splits.test_fold,
     )
 
-    if args.gpu_mel and args.mel_cache_dir:
-        raise SystemExit("--gpu-mel and --mel-cache-dir are mutually exclusive")
     if args.aug_variants > 1 and not args.mel_cache_dir:
         raise SystemExit("--aug-variants>1 needs --mel-cache-dir (offline cache)")
-    if args.aug_variants > 1 and args.gpu_mel:
-        raise SystemExit("--aug-variants is a cache feature; not used with --gpu-mel")
 
     if args.precompute_mel_cache:
         if not args.mel_cache_dir:
@@ -539,21 +517,6 @@ def main() -> None:
         args, num_classes, device, device_type
     )
 
-    # GPU mel front-end: built on-device, owns aug for the waveform path.
-    frontend = None
-    if args.gpu_mel:
-        log.info("STAGE: build GPU mel front-end (device=%s)", args.device)
-        frontend = GPUMelFrontend(
-            mel_cfg,
-            norm,
-            derivatives=args.model.endswith("_DDD"),
-            specaug_order=args.specaug_order,
-            channel_norm=args.channel_norm,
-            chan_norm=chan_norm,
-            wave_aug=WaveformAugment(sample_rate=mel_cfg.sample_rate),
-            spec_aug=SpecAugment(),
-        ).to(device)
-
     best_acc, best_epoch = train_model(
         args,
         model,
@@ -565,11 +528,10 @@ def main() -> None:
         device,
         class_names,
         wandb_logger,
-        frontend=frontend,
     )
     test_acc = evaluate_test(
         args, model, loaders[2], criterion, optimizer, scaler, device,
-        splits.test_fold, frontend=frontend,
+        splits.test_fold,
     )
     write_metrics(args, splits, best_acc, best_epoch, test_acc, num_classes)
 

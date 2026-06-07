@@ -129,13 +129,7 @@ class TrainArgs(DataclassArgs):
         metadata={"help": "offline static wave-aug: cache K frozen mels/clip "
         "(variant 0 clean + K-1 wave-aug copies); train picks one at random per "
         "access. Keeps wave-aug under --mel-cache-dir at K-way diversity instead "
-        "of bypassed. 1=off. Needs --mel-cache-dir; ignored with --gpu-mel."},
-    )
-    gpu_mel: bool = field(
-        default=False,
-        metadata={"help": "compute mel on GPU per-batch (workers return raw "
-        "waveform). Removes the CPU mel bottleneck. Mutually exclusive with "
-        "--mel-cache-dir (cache is CPU-side)."},
+        "of bypassed. 1=off. Needs --mel-cache-dir."},
     )
     batch_size: int = 4  # PCAw SVD is VRAM-heavy
     accum_steps: int = 8  # 4*8 = effective batch 32
