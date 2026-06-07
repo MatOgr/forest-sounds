@@ -1,7 +1,14 @@
 import argparse
+import typing
 from dataclasses import MISSING, dataclass, field, fields
+from typing import Literal
 
 import torch
+
+MODEL_VARIANTS = Literal[
+    "CNN_PCAw_SSRPMS_KAN",
+    "CNN_PCAw_SSRPMS_KAN_DDD",
+]
 
 
 class DataclassArgs:
@@ -12,6 +19,8 @@ class DataclassArgs:
         nargs       -> argparse nargs (e.g. "+", argparse.REMAINDER)
         positional  -> True for a positional arg (no `--` flag)
     bool fields become `store_true`; their dataclass default is the flag-off value.
+    Literal-typed fields become a str arg with argparse `choices` = the Literal
+    values (Literal itself isn't a callable, so it can't be an argparse `type`).
     """
 
     @classmethod
@@ -36,7 +45,12 @@ class DataclassArgs:
                 p.add_argument(flag, action="store_true", **kw)
                 continue
 
-            kw["type"] = f.metadata.get("type", f.type)
+            ftype = f.metadata.get("type", f.type)
+            # Literal -> str arg constrained by choices (Literal isn't callable).
+            if typing.get_origin(ftype) is Literal:
+                kw["choices"] = list(typing.get_args(ftype))
+                ftype = str
+            kw["type"] = ftype
             if "nargs" in f.metadata:
                 kw["nargs"] = f.metadata["nargs"]
             if f.default is not MISSING:
@@ -69,6 +83,60 @@ class TrainArgs(DataclassArgs):
     )
     epochs: int = 300
     seed: int = field(default=42, metadata={"help": "RNG seed (torch/numpy/random)"})
+    model: MODEL_VARIANTS = field(
+        default="CNN_PCAw_SSRPMS_KAN",
+        metadata={
+            "help": "CNN_PCAw_SSRPMS_KAN (1-chan) or CNN_PCAw_SSRPMS_KAN_DDD "
+            "(3-chan mel + delta + delta-delta). _DDD auto-enables derivatives."
+        },
+    )
+    specaug_order: str = field(
+        default="after",
+        metadata={
+            "help": "_DDD only: 'after' masks the stacked 3-chan tensor, "
+            "'before' masks base mel pre-derivation."
+        },
+    )
+    channel_norm: str = field(
+        default="none",
+        metadata={
+            "help": "_DDD only per-channel normalization: 'none' (deltas of "
+            "normalized mel), 'instance' (per-sample per-chan z-score), "
+            "'dataset' (per-chan train stats; computed + cached in --stats)."
+        },
+    )
+    sample_rate: int = field(
+        default=44100,
+        metadata={"help": "target SR; clips resampled to this. num_samples "
+        "= sample_rate * 5 s, so input length tracks SR automatically."},
+    )
+    n_fft: int = field(default=1024, metadata={"help": "STFT window size"})
+    hop_length: int = field(default=512, metadata={"help": "STFT hop"})
+    n_mels: int = field(default=40, metadata={"help": "mel bins (freq dim)"})
+    mel_cache_dir: str = field(
+        default="",
+        metadata={"help": "dir for raw-dB mel disk cache (empty=off). Reused "
+        "across runs with matching mel specs; subdir keyed by sr/n_fft/hop/"
+        "n_mels. NOTE: enabling it bypasses waveform augment (pre-mel)."},
+    )
+    precompute_mel_cache: bool = field(
+        default=False,
+        metadata={"help": "warm the mel cache (all folds) before training, then "
+        "train. Needs --mel-cache-dir."},
+    )
+    aug_variants: int = field(
+        default=1,
+        metadata={"help": "offline static wave-aug: cache K frozen mels/clip "
+        "(variant 0 clean + K-1 wave-aug copies); train picks one at random per "
+        "access. Keeps wave-aug under --mel-cache-dir at K-way diversity instead "
+        "of bypassed. 1=off. Needs --mel-cache-dir; ignored with --gpu-mel."},
+    )
+    gpu_mel: bool = field(
+        default=False,
+        metadata={"help": "compute mel on GPU per-batch (workers return raw "
+        "waveform). Removes the CPU mel bottleneck. Mutually exclusive with "
+        "--mel-cache-dir (cache is CPU-side)."},
+    )
     batch_size: int = 4  # PCAw SVD is VRAM-heavy
     accum_steps: int = 8  # 4*8 = effective batch 32
     lr: float = 1e-3

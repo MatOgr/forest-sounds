@@ -39,6 +39,12 @@ class PCAPooling2D(nn.Module):
     """
     Downsamples the feature maps by computing principal components localized
     across the pooling window, retaining principal variance over traditional pooling.
+
+    Blocker stays: PCAPooling2D.svd (line 66) has no ONNX op → export raises on SVD node. Docstring flags it. To unblock pick one:
+        1. Swap PCA pool → avg/max pool (retrain, simplest)
+        2. Fixed-projection approx of 1st PC (precompute, no per-batch SVD)
+        3. Run torch+torchaudio directly on UGV (if board has full PyTorch)
+
     """
 
     def __init__(self, kernel_size=2):
@@ -159,7 +165,70 @@ class HybridConvKAN(nn.Module):
 
 
 # ==========================================
-# 4. VERIFICATION PIPELINE EXAMPLES
+# 4. EDGE EXPORT (waveform -> logits, mel folded into graph)
+# ==========================================
+def export_onnx(
+    model: nn.Module,
+    path: str = "model.onnx",
+    num_samples: int = 64_000,
+    opset: int = 17,
+    dynamic_time: bool = False,
+):
+    """Export the full waveform->logits graph for edge deployment (UGV).
+
+    Mel front-end is already inside the model, so the edge runtime feeds raw
+    PCM and reads class logits — no torchaudio dependency on-device.
+
+    opset>=17 is REQUIRED: that's where ONNX gained the STFT op that
+    torchaudio's MelSpectrogram lowers to.
+
+    WARNING: PCAPooling2D uses torch.linalg.svd, which has NO ONNX op.
+    Export will raise on the SVD node. Replace PCA pooling with an
+    ONNX-friendly pool (avg/max, or a fixed-projection approx) before
+    relying on this path, or run torch/torchaudio directly on the UGV.
+
+    dynamic_time=False -> fixed input shape, lets the edge runtime
+    (ONNX Runtime / TensorRT) autotune; faster, recommended for UGV.
+    """
+    model.eval()
+    dummy = torch.randn(1, num_samples)
+    dynamic_axes = {"wav": {1: "samples"}} if dynamic_time else None
+    torch.onnx.export(
+        model,
+        dummy,
+        path,
+        opset_version=opset,
+        input_names=["wav"],
+        output_names=["logits"],
+        dynamic_axes=dynamic_axes,
+    )
+    print(f"-> exported ONNX graph: {path} (opset {opset})")
+    return path
+
+
+def verify_parity(
+    model: nn.Module, onnx_path: str, num_samples: int = 64_000, tol: float = 1e-3
+) -> float:
+    """Assert exported ONNX matches torch logits on a random clip.
+
+    MANDATORY after export: silent mel/param drift = distribution shift =
+    accuracy drop with no error. Returns max abs diff."""
+    import onnxruntime as ort  # optional dep, only needed for verification
+
+    model.eval()
+    wav = torch.randn(1, num_samples)
+    with torch.no_grad():
+        ref = model(wav).cpu().numpy()
+    sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+    out = sess.run(["logits"], {"wav": wav.numpy()})[0]
+    diff = float(abs(ref - out).max())
+    print(f"parity max|Δ| = {diff:.2e} (tol {tol:.0e})")
+    assert diff < tol, f"ONNX parity FAILED: {diff} >= {tol}"
+    return diff
+
+
+# ==========================================
+# 5. VERIFICATION PIPELINE EXAMPLES
 # ==========================================
 if __name__ == "__main__":
     # Initialize the model (Configured for ESC-50 class layout)

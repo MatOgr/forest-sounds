@@ -20,8 +20,8 @@ import resource  # peak-RSS diagnostics (Unix only)
 import numpy as np
 import torch
 import torch.nn as nn
-from model import CNN_PCAw_SSRPMS_KAN
-from preprocessing import NormalizeMeanStd
+from model import CNN_PCAw_SSRPMS_KAN, CNN_PCAw_SSRPMS_KAN_DDD
+from preprocessing import NormalizeMeanStd, NormalizePerChannel
 from torch.utils.data import DataLoader
 
 from .args import TrainArgs
@@ -30,7 +30,14 @@ from .args import TrainArgs
 # (model, preprocessing): absolute, resolved via the editable install.
 from .augment import SpecAugment, WaveformAugment, mixup_batch, mixup_criterion
 from .cross_validate import Splits
-from .fsc22_dataset import FSC22Dataset, build_label_map, compute_train_stats
+from .fsc22_dataset import (
+    FSC22Dataset,
+    MelConfig,
+    build_label_map,
+    compute_train_stats,
+    precompute_mel_cache,
+)
+from .gpu_mel import FSC22WaveformDataset, GPUMelFrontend
 from .wnb import WandbLogger
 
 logging.basicConfig(
@@ -39,6 +46,12 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("fsc22.train")
+
+
+MODELS = {
+    "CNN_PCAw_SSRPMS_KAN": CNN_PCAw_SSRPMS_KAN,
+    "CNN_PCAw_SSRPMS_KAN_DDD": CNN_PCAw_SSRPMS_KAN_DDD,
+}
 
 
 def seed_everything(seed: int) -> torch.Generator:
@@ -63,14 +76,20 @@ def _worker_init(worker_id: int) -> None:
     np.random.seed(base)
 
 
-def resolve_stats_path(stats: str, val_fold: int, test_fold: int | None) -> str:
-    """Per-split stats when a test fold is held out, so CV folds never reuse a
-    mean/std computed over data that lands in another fold's train set."""
+def resolve_stats_path(
+    stats: str, val_fold: int, test_fold: int | None, model: str, mel_cfg: MelConfig
+) -> str:
+    """Per-split, per-model, per-mel-config stats. Test-fold split keeps CV folds
+    from reusing a mean/std computed over another fold's train data; the model
+    tag keeps 1-chan and 3-chan (_DDD) stats apart; the mel tag keeps different
+    sample_rate/n_fft/hop/n_mels stats from clobbering each other (the dB
+    distribution changes with the mel front-end)."""
     if stats:
         return stats
-    if test_fold:
-        return f"stats/fsc22_mel_stats_val{val_fold}_test{test_fold}.json"
-    return "stats/fsc22_mel_stats.json"
+    # val_fold is always in the tag: it's excluded from train, so different
+    # val folds yield different train stats and must not share a cache file.
+    split = f"_val{val_fold}" + (f"_test{test_fold}" if test_fold else "")
+    return f"stats/fsc22_mel_stats_{model}_{mel_cfg.tag()}{split}.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -105,6 +124,7 @@ def run_epoch(
     train,
     scaler: torch.amp.GradScaler,
     accum_steps=1,
+    frontend=None,
 ) -> tuple[float, float]:
     phase = "train" if train else "val"
     use_amp = scaler.is_enabled()
@@ -117,6 +137,11 @@ def run_epoch(
     for bi, (x, y) in enumerate(loader):
         try:
             x, y = x.to(device), y.to(device)
+            # GPU mel: loader yields raw waveform -> features here, on-device.
+            # Kept outside autocast (mel/linalg want fp32; matches model's
+            # internal fp32-forced PCAw path).
+            if frontend is not None:
+                x = frontend(x, train=train)
             if bi == 0:
                 _log_batch_diag(phase, x, y, device, use_amp)
 
@@ -160,36 +185,93 @@ def run_epoch(
 # --------------------------------------------------------------------------- #
 # Setup helpers
 # --------------------------------------------------------------------------- #
-def load_or_compute_norm(args, train_folds) -> NormalizeMeanStd:
+def load_or_compute_norm(
+    args, train_folds, mel_cfg: MelConfig
+) -> tuple[NormalizeMeanStd, NormalizePerChannel | None]:
     log.info("STAGE: normalization stats")
     os.makedirs(os.path.dirname(args.stats) or ".", exist_ok=True)
-    if args.recompute_stats or not os.path.exists(args.stats):
+    # Per-channel (3-chan) stats are needed only for the "dataset" channel_norm.
+    need_chan = args.model.endswith("_DDD") and args.channel_norm == "dataset"
+
+    def _cache_ok() -> bool:
+        if args.recompute_stats or not os.path.exists(args.stats):
+            return False
+        if need_chan:  # cached base-only stats can't serve a 3-chan request
+            with open(args.stats, encoding="utf-8") as f:
+                return "means" in json.load(f)
+        return True
+
+    if not _cache_ok():
         log.info("computing train stats (one-time, streams all train clips)...")
-        compute_train_stats(args.csv, args.audio_dir, train_folds, args.stats)
+        compute_train_stats(
+            args.csv,
+            args.audio_dir,
+            train_folds,
+            args.stats,
+            derivatives=need_chan,
+            mel_cfg=mel_cfg,
+        )
     else:
         log.info("reusing cached stats: %s", args.stats)
+
     with open(args.stats, encoding="utf-8") as f:
         s = json.load(f)
     log.info("stats mean=%.4f std=%.4f", s["mean"], s["std"])
-    return NormalizeMeanStd(s["mean"], s["std"])
+    norm = NormalizeMeanStd(s["mean"], s["std"])
+    chan_norm = None
+    if need_chan:
+        chan_norm = NormalizePerChannel(s["means"], s["stds"])
+        log.info("per-channel stats means=%s stds=%s", s["means"], s["stds"])
+    return norm, chan_norm
 
 
 def build_loaders(
-    args, splits, id_to_idx, norm, device_type
+    args, splits, id_to_idx, norm, device_type, mel_cfg: MelConfig, chan_norm=None
 ) -> tuple[DataLoader, DataLoader, DataLoader | None]:
     log.info("STAGE: build datasets / loaders")
-    train_ds = FSC22Dataset(
+    # GPU mel: workers return raw waveform, mel/aug done on-device per batch.
+    DS = FSC22WaveformDataset if args.gpu_mel else FSC22Dataset
+    # 3-channel features only for the _DDD model; flags are inert otherwise.
+    ddd_kw = dict(
+        derivatives=args.model.endswith("_DDD"),
+        specaug_order=args.specaug_order,
+        channel_norm=args.channel_norm,
+        chan_norm=chan_norm,
+        mel_cfg=mel_cfg,
+        # cache is CPU-side; the GPU path computes mel fresh per batch.
+        cache_dir=None if args.gpu_mel else (args.mel_cache_dir or None),
+    )
+    # Augment lives in the dataset for the CPU path; in the GPU path the
+    # GPUMelFrontend owns it (built in main), so pass none to the dataset.
+    train_aug = (
+        {}
+        if args.gpu_mel
+        else dict(
+            wave_aug=WaveformAugment(sample_rate=mel_cfg.sample_rate),
+            spec_aug=SpecAugment(),
+        )
+    )
+    train_ds = DS(
         args.csv,
         args.audio_dir,
         splits.train_folds,
         id_to_idx,
         norm,
-        wave_aug=WaveformAugment(sample_rate=44100),
-        spec_aug=SpecAugment(),
         train=True,
+        # K frozen wave-aug mel copies per clip (cache path); 1 = clean only.
+        # val/test omit it -> always read the clean variant.
+        aug_variants=args.aug_variants,
+        **train_aug,
+        **ddd_kw,
     )
-    val_ds = FSC22Dataset(
-        args.csv, args.audio_dir, splits.val_folds, id_to_idx, norm, train=False
+    val_ds = DS(
+        args.csv,
+        args.audio_dir,
+        splits.val_folds,
+        id_to_idx,
+        norm,
+        train=False,
+        **ddd_kw,
     )
 
     loader_kw = dict(
@@ -215,8 +297,14 @@ def build_loaders(
 
     test_loader = None
     if splits.test_fold:
-        test_ds = FSC22Dataset(
-            args.csv, args.audio_dir, [splits.test_fold], id_to_idx, norm, train=False
+        test_ds = DS(
+            args.csv,
+            args.audio_dir,
+            [splits.test_fold],
+            id_to_idx,
+            norm,
+            train=False,
+            **ddd_kw,
         )
         test_loader = DataLoader(
             test_ds, batch_size=args.batch_size, shuffle=False, **loader_kw
@@ -242,8 +330,10 @@ def build_training(
     torch.optim.lr_scheduler.LRScheduler,
     torch.amp.GradScaler,
 ]:
-    log.info("STAGE: build model (device=%s)", args.device)
-    model = CNN_PCAw_SSRPMS_KAN(num_classes=num_classes).to(device)
+    log.info("STAGE: build model (device=%s) model=%s", args.device, args.model)
+    if args.model not in MODELS:
+        raise SystemExit(f"unknown --model {args.model!r}; choices: {list(MODELS)}")
+    model = MODELS[args.model](num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
@@ -272,6 +362,7 @@ def train_model(
     device,
     class_names,
     wandb_logger,
+    frontend=None,
 ) -> tuple[float, int]:
     train_loader, val_loader, _ = loaders
     best_acc, best_epoch, wait = 0.0, -1, 0
@@ -288,6 +379,7 @@ def train_model(
             True,
             accum_steps=args.accum_steps,
             scaler=scaler,
+            frontend=frontend,
         )
         val_loss, val_acc = run_epoch(
             model,
@@ -298,6 +390,7 @@ def train_model(
             0.0,
             False,
             scaler=scaler,
+            frontend=frontend,
         )
         scheduler.step()
         lr = scheduler.get_last_lr()[0]
@@ -335,7 +428,8 @@ def train_model(
 
 
 def evaluate_test(
-    args, model, test_loader, criterion, optimizer, scaler, device, test_fold
+    args, model, test_loader, criterion, optimizer, scaler, device, test_fold,
+    frontend=None,
 ) -> float | None:
     """One-shot held-out test eval (unbiased: test fold never trained/selected on)."""
     if test_loader is None:
@@ -346,7 +440,8 @@ def evaluate_test(
     else:
         log.warning("no checkpoint at %s; testing last-epoch weights", args.out)
     _, test_acc = run_epoch(
-        model, test_loader, criterion, optimizer, device, 0.0, False, scaler=scaler
+        model, test_loader, criterion, optimizer, device, 0.0, False, scaler=scaler,
+        frontend=frontend,
     )
     print(f"TEST fold={test_fold}  test_acc={test_acc:.3f}")
     return test_acc
@@ -385,8 +480,15 @@ def main() -> None:
     if not os.path.isfile(args.csv):
         log.error("csv not found: %s", args.csv)
 
+    mel_cfg = MelConfig.from_args(
+        args.sample_rate, args.n_fft, args.hop_length, args.n_mels
+    )
+    log.info("mel cfg: %s", mel_cfg)
+
     splits = Splits.resolve(args.val_fold, args.test_fold)
-    args.stats = resolve_stats_path(args.stats, args.val_fold, splits.test_fold)
+    args.stats = resolve_stats_path(
+        args.stats, args.val_fold, splits.test_fold, args.model, mel_cfg
+    )
     log.info("stats path: %s", args.stats)
 
     log.info("STAGE: build label map")
@@ -400,12 +502,57 @@ def main() -> None:
         splits.test_fold,
     )
 
+    if args.gpu_mel and args.mel_cache_dir:
+        raise SystemExit("--gpu-mel and --mel-cache-dir are mutually exclusive")
+    if args.aug_variants > 1 and not args.mel_cache_dir:
+        raise SystemExit("--aug-variants>1 needs --mel-cache-dir (offline cache)")
+    if args.aug_variants > 1 and args.gpu_mel:
+        raise SystemExit("--aug-variants is a cache feature; not used with --gpu-mel")
+
+    if args.precompute_mel_cache:
+        if not args.mel_cache_dir:
+            raise SystemExit("--precompute-mel-cache needs --mel-cache-dir")
+        log.info(
+            "STAGE: precompute mel cache (clean all folds; %d-way wave-aug on "
+            "train folds %s)", args.aug_variants, splits.train_folds,
+        )
+        precompute_mel_cache(
+            args.csv,
+            args.audio_dir,
+            args.mel_cache_dir,
+            mel_cfg,
+            wave_aug=(
+                WaveformAugment(sample_rate=mel_cfg.sample_rate)
+                if args.aug_variants > 1
+                else None
+            ),
+            aug_variants=args.aug_variants,
+            aug_folds=splits.train_folds,
+        )
+
     wandb_logger = WandbLogger(args)
-    norm = load_or_compute_norm(args, splits.train_folds)
-    loaders = build_loaders(args, splits, id_to_idx, norm, device_type)
+    norm, chan_norm = load_or_compute_norm(args, splits.train_folds, mel_cfg)
+    loaders = build_loaders(
+        args, splits, id_to_idx, norm, device_type, mel_cfg, chan_norm=chan_norm
+    )
     model, criterion, optimizer, scheduler, scaler = build_training(
         args, num_classes, device, device_type
     )
+
+    # GPU mel front-end: built on-device, owns aug for the waveform path.
+    frontend = None
+    if args.gpu_mel:
+        log.info("STAGE: build GPU mel front-end (device=%s)", args.device)
+        frontend = GPUMelFrontend(
+            mel_cfg,
+            norm,
+            derivatives=args.model.endswith("_DDD"),
+            specaug_order=args.specaug_order,
+            channel_norm=args.channel_norm,
+            chan_norm=chan_norm,
+            wave_aug=WaveformAugment(sample_rate=mel_cfg.sample_rate),
+            spec_aug=SpecAugment(),
+        ).to(device)
 
     best_acc, best_epoch = train_model(
         args,
@@ -418,9 +565,11 @@ def main() -> None:
         device,
         class_names,
         wandb_logger,
+        frontend=frontend,
     )
     test_acc = evaluate_test(
-        args, model, loaders[2], criterion, optimizer, scaler, device, splits.test_fold
+        args, model, loaders[2], criterion, optimizer, scaler, device,
+        splits.test_fold, frontend=frontend,
     )
     write_metrics(args, splits, best_acc, best_epoch, test_acc, num_classes)
 

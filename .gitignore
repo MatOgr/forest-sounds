@@ -7,3 +7,4 @@ stats/
 .vscode/
 wandb/
 *.egg-info
+data/cache/

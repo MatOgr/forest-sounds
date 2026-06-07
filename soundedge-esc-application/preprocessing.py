@@ -21,6 +21,20 @@ class NormalizeMeanStd(nn.Module):
         return (x - self.mean) / (self.std + self.eps)
 
 
+class NormalizePerChannel(nn.Module):
+    """Per-channel mean/std normalization for stacked [C, F, T] features
+    (e.g. mel + delta + delta-delta). `means`/`stds` are length-C sequences."""
+
+    def __init__(self, means, stds, eps: float = 1e-6):
+        super().__init__()
+        self.register_buffer("mean", torch.tensor(means).view(-1, 1, 1))
+        self.register_buffer("std", torch.tensor(stds).view(-1, 1, 1))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return (x - self.mean) / (self.std + self.eps)
+
+
 def mel_transform_from_stats(
     stats_path: str,
     sample_rate: int = 44100,
