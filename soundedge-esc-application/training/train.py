@@ -125,7 +125,12 @@ def run_epoch(
     accum_steps=1,
 ) -> tuple[float, float]:
     phase = "train" if train else "val"
-    use_amp = scaler.is_enabled()
+    # LBFGS reevaluates the loss via a closure; AMP/GradScaler and grad
+    # accumulation don't apply, so it takes a dedicated step path.
+    needs_closure = isinstance(optimizer, torch.optim.LBFGS)
+    use_amp = scaler.is_enabled() and not needs_closure
+    if train and needs_closure and accum_steps != 1:
+        log.warning("LBFGS: --accum-steps ignored (closure steps per batch)")
     model.train(train)
     total_loss, correct, n = 0.0, 0, 0
     torch.set_grad_enabled(train)
@@ -138,22 +143,45 @@ def run_epoch(
             if bi == 0:
                 _log_batch_diag(phase, x, y, device, use_amp)
 
-            with torch.autocast(device_type=device.type, enabled=use_amp):
-                if train and mixup_alpha > 0:
-                    x, y_a, y_b, lam = mixup_batch(x, y, mixup_alpha)
-                    logits = model(x)
-                    loss = mixup_criterion(criterion, logits, y_a, y_b, lam)
+            if train and needs_closure:
+                # Fix the (possibly mixed) batch once so every closure
+                # reevaluation optimizes the same objective.
+                if mixup_alpha > 0:
+                    xb, y_a, y_b, lam = mixup_batch(x, y, mixup_alpha)
                 else:
-                    logits = model(x)
-                    loss = criterion(logits, y)
+                    xb, y_a, y_b, lam = x, y, None, None
+                cap: dict = {}
 
-            if train:
-                # Scale so accumulated grads ~= one big-batch step.
-                scaler.scale(loss / accum_steps).backward()
-                if (bi + 1) % accum_steps == 0:
-                    scaler.step(optimizer)
-                    scaler.update()
+                def closure():
                     optimizer.zero_grad()
+                    out = model(xb)
+                    if y_b is None:
+                        l = criterion(out, y)
+                    else:
+                        l = mixup_criterion(criterion, out, y_a, y_b, lam)
+                    l.backward()
+                    cap["out"], cap["loss"] = out, l
+                    return l
+
+                loss = optimizer.step(closure)
+                logits = cap["out"]
+            else:
+                with torch.autocast(device_type=device.type, enabled=use_amp):
+                    if train and mixup_alpha > 0:
+                        x, y_a, y_b, lam = mixup_batch(x, y, mixup_alpha)
+                        logits = model(x)
+                        loss = mixup_criterion(criterion, logits, y_a, y_b, lam)
+                    else:
+                        logits = model(x)
+                        loss = criterion(logits, y)
+
+                if train:
+                    # Scale so accumulated grads ~= one big-batch step.
+                    scaler.scale(loss / accum_steps).backward()
+                    if (bi + 1) % accum_steps == 0:
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad()
 
             total_loss += loss.item() * x.size(0)
             correct += (logits.argmax(1) == y).sum().item()
@@ -163,7 +191,7 @@ def run_epoch(
             raise
 
     # Flush trailing grads if the last accumulation window was partial.
-    if train and n > 0 and len(loader) % accum_steps != 0:
+    if train and not needs_closure and n > 0 and len(loader) % accum_steps != 0:
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
@@ -308,6 +336,89 @@ def build_loaders(
     return train_loader, val_loader, test_loader
 
 
+def _load_sophiag():
+    """Return SophiaG from the `sophia-optimizer` pkg. Its `__init__.py` imports
+    a nonexistent `sophiag` symbol and crashes on `import sophia`, so load the
+    self-contained `sophia/sophia.py` module file directly, bypassing __init__."""
+    import importlib.util
+
+    spec = importlib.util.find_spec("sophia")  # locate pkg without executing __init__
+    if spec is None or not spec.submodule_search_locations:
+        raise SystemExit("sophia not installed: pip install sophia-optimizer")
+    mod_path = os.path.join(spec.submodule_search_locations[0], "sophia.py")
+    mspec = importlib.util.spec_from_file_location("_sophia_impl", mod_path)
+    module = importlib.util.module_from_spec(mspec)
+    mspec.loader.exec_module(module)
+    return module.SophiaG
+
+
+def _param_groups(args, model) -> list[dict]:
+    """Param groups for the --kan-lr-scale split. scale==1.0 -> a single group
+    (identical to model.parameters(), no behavior change). scale!=1.0 -> the
+    WavKAN head gets lr*scale and weight_decay=0 (wavelet coeffs shouldn't be
+    decayed toward 0), everything else (conv+fc) keeps base lr/wd. This is the
+    cheap precursor to a true two-optimizer split: tune the head's lr in one
+    optimizer before paying for separate .step() machinery."""
+    if args.kan_lr_scale == 1.0:
+        return [{"params": list(model.parameters())}]
+    kan_ids = {id(p) for p in model.kan.parameters()}
+    rest = [p for p in model.parameters() if id(p) not in kan_ids]
+    log.info(
+        "kan split: lr=%g (scale %g, wd=0) | rest lr=%g wd=%g",
+        args.lr * args.kan_lr_scale,
+        args.kan_lr_scale,
+        args.lr,
+        args.weight_decay,
+    )
+    return [
+        {"params": rest},  # inherits optimizer-level lr / weight_decay
+        {
+            "params": list(model.kan.parameters()),
+            "lr": args.lr * args.kan_lr_scale,
+            "weight_decay": 0.0,
+        },
+    ]
+
+
+def build_optimizer(args, model) -> torch.optim.Optimizer:
+    """Select optimizer from --optimizer. AdamW/SGD/Sophia step normally; LBFGS
+    is second-order and drives a closure in run_epoch (AMP/accum forced off).
+    AdamW/SGD honor --kan-lr-scale (per-group lr for the WavKAN head)."""
+    name = args.optimizer.lower()
+    if name in ("lbfgs", "sophia") and args.kan_lr_scale != 1.0:
+        log.warning("--kan-lr-scale ignored: only adamw/sgd use param groups")
+    if name == "adamw":
+        return torch.optim.AdamW(
+            _param_groups(args, model), lr=args.lr, weight_decay=args.weight_decay
+        )
+    if name == "sgd":
+        return torch.optim.SGD(
+            _param_groups(args, model),
+            lr=args.lr,
+            momentum=args.momentum,
+            nesterov=args.nesterov,
+            weight_decay=args.weight_decay,
+        )
+    params = model.parameters()
+    if name == "lbfgs":
+        return torch.optim.LBFGS(
+            params,
+            lr=args.lr,
+            max_iter=args.lbfgs_max_iter,
+            history_size=args.lbfgs_history,
+        )
+    if name == "sophia":  # TODO: reconsider this one
+        SophiaG = _load_sophiag()
+        return SophiaG(
+            params,
+            lr=args.lr,
+            betas=(0.965, 0.99),
+            rho=args.sophia_rho,
+            weight_decay=args.weight_decay,
+        )
+    raise SystemExit(f"unknown --optimizer {args.optimizer!r}")
+
+
 def build_training(
     args, num_classes, device, device_type
 ) -> tuple[
@@ -322,13 +433,16 @@ def build_training(
         raise SystemExit(f"unknown --model {args.model!r}; choices: {list(MODELS)}")
     model = MODELS[args.model](num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
-    )
+    optimizer = build_optimizer(args, model)
+    log.info("optimizer=%s lr=%g", args.optimizer, args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-    amp_enabled = args.amp and device_type == "cuda"
-    if args.amp and not amp_enabled:
+    # LBFGS reevaluates the loss inside a closure; GradScaler/AMP can't wrap it.
+    lbfgs = isinstance(optimizer, torch.optim.LBFGS)
+    amp_enabled = args.amp and device_type == "cuda" and not lbfgs
+    if args.amp and lbfgs:
+        log.warning("--amp ignored: LBFGS uses a closure (AMP unsupported)")
+    if args.amp and not amp_enabled and not lbfgs:
         log.warning("--amp ignored: only supported on cuda")
     scaler = torch.amp.GradScaler(device_type, enabled=amp_enabled)
     log.info("AMP %s", "ON" if amp_enabled else "off")
@@ -412,7 +526,14 @@ def train_model(
 
 
 def evaluate_test(
-    args, model, test_loader, criterion, optimizer, scaler, device, test_fold,
+    args,
+    model,
+    test_loader,
+    criterion,
+    optimizer,
+    scaler,
+    device,
+    test_fold,
 ) -> float | None:
     """One-shot held-out test eval (unbiased: test fold never trained/selected on)."""
     if test_loader is None:
@@ -423,7 +544,14 @@ def evaluate_test(
     else:
         log.warning("no checkpoint at %s; testing last-epoch weights", args.out)
     _, test_acc = run_epoch(
-        model, test_loader, criterion, optimizer, device, 0.0, False, scaler=scaler,
+        model,
+        test_loader,
+        criterion,
+        optimizer,
+        device,
+        0.0,
+        False,
+        scaler=scaler,
     )
     print(f"TEST fold={test_fold}  test_acc={test_acc:.3f}")
     return test_acc
@@ -492,7 +620,9 @@ def main() -> None:
             raise SystemExit("--precompute-mel-cache needs --mel-cache-dir")
         log.info(
             "STAGE: precompute mel cache (clean all folds; %d-way wave-aug on "
-            "train folds %s)", args.aug_variants, splits.train_folds,
+            "train folds %s)",
+            args.aug_variants,
+            splits.train_folds,
         )
         precompute_mel_cache(
             args.csv,
@@ -530,7 +660,13 @@ def main() -> None:
         wandb_logger,
     )
     test_acc = evaluate_test(
-        args, model, loaders[2], criterion, optimizer, scaler, device,
+        args,
+        model,
+        loaders[2],
+        criterion,
+        optimizer,
+        scaler,
+        device,
         splits.test_fold,
     )
     write_metrics(args, splits, best_acc, best_epoch, test_acc, num_classes)

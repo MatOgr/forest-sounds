@@ -21,6 +21,7 @@ dependencies = [
     "ipykernel",
     # "efficient-kan",
     "jaxtyping",
+    "sophia-optimizer",
     "wandb",
 ]
 

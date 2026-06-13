@@ -10,6 +10,13 @@ MODEL_VARIANTS = Literal[
     "CNN_PCAw_SSRPMS_KAN_DDD",
 ]
 
+OPTIMIZERS = Literal[
+    "adamw",   # default; lr 1e-3
+    "sgd",     # Nesterov momentum; lr ~1e-2
+    "lbfgs",   # 2nd-order, closure-based; lr ~1e-1, no AMP/accum/mixup-determinism
+    "sophia",  # SophiaG; needs `pip install sophia-optimizer`; lr ~2e-4
+]
+
 
 class DataclassArgs:
     """Mixin: build an ArgumentParser from a dataclass's fields and parse into
@@ -135,6 +142,34 @@ class TrainArgs(DataclassArgs):
     accum_steps: int = 8  # 4*8 = effective batch 32
     lr: float = 1e-3
     weight_decay: float = 1e-4
+    optimizer: OPTIMIZERS = field(
+        default="adamw",
+        metadata={"help": "optimizer: adamw (lr~1e-3), sgd (Nesterov, lr~1e-2), "
+        "lbfgs (2nd-order closure; forces AMP/accum off, lr~1e-1), sophia "
+        "(SophiaG, needs sophia-optimizer pkg, lr~2e-4). Tune --lr per choice."},
+    )
+    kan_lr_scale: float = field(
+        default=1.0,
+        metadata={"help": "lr multiplier for the WavKAN head's param group "
+        "(adamw/sgd only). 1.0=single group (no split). <1 trains the kan "
+        "slower than conv+fc; kan also gets weight_decay=0. Sweep this before "
+        "committing to a true two-optimizer split."},
+    )
+    momentum: float = field(
+        default=0.9, metadata={"help": "SGD momentum"}
+    )
+    nesterov: bool = field(
+        default=False, metadata={"help": "SGD: enable Nesterov momentum"}
+    )
+    sophia_rho: float = field(
+        default=0.01, metadata={"help": "SophiaG rho (Hessian clip threshold)"}
+    )
+    lbfgs_max_iter: int = field(
+        default=20, metadata={"help": "LBFGS max iterations per .step()"}
+    )
+    lbfgs_history: int = field(
+        default=100, metadata={"help": "LBFGS history size"}
+    )
     mixup_alpha: float = 0.2
     patience: int = 100
     amp: bool = field(default=False, metadata={"help": "mixed precision (cuda only)"})
