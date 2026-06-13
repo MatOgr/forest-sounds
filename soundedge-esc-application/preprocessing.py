@@ -4,7 +4,6 @@ import soundfile as sf
 import torch
 import torch.nn.functional as F
 import torchaudio
-from torch import nn
 
 TARGET_SR = 44100
 TARGET_DURATION = 5
