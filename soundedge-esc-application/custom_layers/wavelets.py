@@ -2,6 +2,10 @@ import torch
 
 
 def mexican_hat(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
+    """Edge and peak detector.
+
+    2nd derivative of Gaussian.
+    """
     term1 = (X**2) - 1
     term2 = torch.exp(-0.5 * X**2)
     wavelet = (2 / 3**0.5 * torch.pi**0.25) * term1 * term2
@@ -11,6 +15,14 @@ def mexican_hat(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
 
 
 def DoGW(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
+    """
+    First derivative of a Gaussian distribution (localized gradient → temporal differentiator).
+
+        $$\psi(t) = -t \cdot e^{-\frac{t^2}{2}}$$
+
+    Ignores static/continuous sounds, fires on fast quiet-loud transitionc
+    Asymmetric → shifts freqs by 90°
+    """
     # Implementing Derivative of Gaussian Wavelet
     dog = -X * torch.exp(-0.5 * X**2)
     wavelet = dog
@@ -20,6 +32,11 @@ def DoGW(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
 
 
 def morlet(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
+    """
+    Pitch tracking & std spectrograms.
+
+    Creates Localized Wave Packet. General time-freq analysis, pitch detection, sustained musical notes analysis.
+    """
     omega0 = 5.0  # Central frequency
     real = torch.cos(omega0 * X)
     envelope = torch.exp(-0.5 * X**2)
@@ -30,6 +47,11 @@ def morlet(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
 
 
 def meyer(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
+    """
+    HQ decomposition & reconstruction.
+
+    Smooth frquency block, orthogonal wavelet → easy (de)composition.
+    """
     # Implement Meyer Wavelet here
     # Constants for the Meyer wavelet transition boundaries
     v = torch.abs(X)
@@ -53,6 +75,11 @@ def meyer(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
 
 
 def shannon(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
+    """
+    Stric & aggressive frequency filtering.
+
+    Sharp-cutoff bandpass / square filter.
+    """
     # Windowing the sinc function to limit its support
     pi = torch.pi
     sinc = torch.sinc(X / pi)  # sinc(x) = sin(pi*x) / (pi*x)
