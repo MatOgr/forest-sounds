@@ -62,3 +62,7 @@ from .viz import (
 from .viz import (
     plot_waveform as plot_waveform,
 )
+from .data import AudioDataset, make_splits, encode_labels
+from .train import train_epoch, eval_epoch, fit, EarlyStopping
+from .metrics import classification_metrics, per_class_f1, inference_latency
+from .xai import LayerActivations, plot_activations
