@@ -1,0 +1,59 @@
+name: Release 🚀
+on:
+    push:
+        branches:
+            - main
+jobs:
+    release:
+        if: "!startsWith(github.event.head_commit.message, 'chore: update changelog')"
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - name: ⬇️ Checkout code
+              uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0 # Full history needed for git-cliff
+
+            - name: 📋 Update CHANGELOG.md
+              uses: orhun/git-cliff-action@v4
+              with:
+                  args: --bump --output CHANGELOG.md
+              env:
+                  GITHUB_REPO: ${{ github.repository }}
+
+            - name: 🔖 Compute next version + release notes
+              uses: orhun/git-cliff-action@v4
+              id: git-cliff
+              with:
+                  args: --bump --unreleased --strip header
+              env:
+                  GITHUB_REPO: ${{ github.repository }}
+
+            - name: 💾 Commit changelog
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  if ! git diff --quiet CHANGELOG.md; then
+                    git add CHANGELOG.md
+                    git commit -m "chore: update changelog [skip ci]"
+                    git push
+                  fi
+
+            - name: 🚀 Create GitHub release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  VERSION="${{ steps.git-cliff.outputs.version }}"
+                  if [ -z "$VERSION" ]; then
+                    echo "No version computed — nothing to release."
+                    exit 0
+                  fi
+                  if git rev-parse "$VERSION" >/dev/null 2>&1; then
+                    echo "Tag $VERSION already exists — no bump-worthy commits. Skipping."
+                    exit 0
+                  fi
+                  gh release create "$VERSION" \
+                    --title "$VERSION" \
+                    --target main \
+                    --notes "${{ steps.git-cliff.outputs.content }}"
