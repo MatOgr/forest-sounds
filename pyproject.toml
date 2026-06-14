@@ -25,6 +25,12 @@ dependencies = [
     "wandb",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+]
+
 [tool.uv]
 package = false
 
