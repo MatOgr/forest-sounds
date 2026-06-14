@@ -1,5 +1,5 @@
-import numpy as np
 import librosa
+import numpy as np
 
 SR = 22050
 N_FFT = 1024
@@ -32,12 +32,14 @@ def extract_handcrafted(y, sr=SR, n_mfcc=N_MFCC):
     roll = librosa.feature.spectral_rolloff(y=y, sr=sr)
     chroma = librosa.feature.chroma_stft(y=y, sr=sr)
     return np.concatenate([
-        m.mean(1), m.std(1),
+        m.mean(1),
+        m.std(1),
         [zcr.mean(), zcr.std()],
         [cent.mean(), cent.std()],
         [bw.mean(), bw.std()],
         [roll.mean(), roll.std()],
-        chroma.mean(1), chroma.std(1),
+        chroma.mean(1),
+        chroma.std(1),
     ]).astype(np.float32)
 
 
@@ -46,6 +48,8 @@ def batch_features(audios, sr=SR, fn=extract_handcrafted):
 
 
 def normalize_spec(spec, mean=None, std=None, eps=1e-6):
-    if mean is None: mean = spec.mean()
-    if std is None:  std = spec.std()
+    if mean is None:
+        mean = spec.mean()
+    if std is None:
+        std = spec.std()
     return (spec - mean) / (std + eps)

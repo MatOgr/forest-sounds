@@ -22,17 +22,23 @@ Quick wiring check (no data needed):
     python -m compression.optimize --smoke
 """
 
+from __future__ import annotations
+
 import copy
 import json
 import logging
 import os
+from typing import TYPE_CHECKING
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from model import CNN_PCAw_SSRPMS_KAN
 from preprocessing import NormalizeMeanStd
+from torch import nn
 from torch.utils.data import DataLoader
+
+if TYPE_CHECKING:
+    import wandb
 
 # Siblings: relative (this is the `compression` package). App-root modules
 # (model, preprocessing): absolute, resolved via the editable install.
@@ -196,11 +202,12 @@ def build_loaders(args):
         norm,
         train=False,
     )
-    kw = dict(
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-        persistent_workers=args.num_workers > 0,
-    )
+    kw = {
+        "num_workers": args.num_workers,
+        "pin_memory": torch.cuda.is_available(),
+        "persistent_workers": args.num_workers > 0,
+    }
+
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True, drop_last=True, **kw
     )
@@ -245,7 +252,7 @@ def iterative_pruning_and_rewind(
     train_loader,
     val_loader,
     device,
-    wb: "wandb.Run | None" = None,
+    wb: wandb.Run | None = None,
 ):
     # Iterative magnitude schedule: small asymmetric cut + brief KD rewind,
     # repeated. conv3 out + fc + KAN stay fixed (KAN frontier constraint).
@@ -293,7 +300,7 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     log.info("device=%s  smoke=%s", device, args.smoke)
 
-    wb: "wandb.Run | None" = None
+    wb: wandb.Run | None = None
     if args.wandb:
         import wandb
 

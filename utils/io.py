@@ -33,7 +33,7 @@ def build_metadata(root, label_from="parent"):
         try:
             dur = librosa.get_duration(path=p)
             sr = librosa.get_samplerate(p)
-        except Exception:
+        except librosa.ParameterError:
             dur, sr = np.nan, np.nan
         rows.append({"path": p, "label": label, "duration": dur, "sr": sr})
     return pd.DataFrame(rows)

@@ -5,12 +5,11 @@ import uuid
 from pathlib import Path
 
 import torch
-from flask import Flask, jsonify, render_template_string, request, send_from_directory
-
 from classes import ESC50_CLASSES
+from flask import Flask, jsonify, render_template_string, request, send_from_directory
 from preprocessing import preprocess_audio
-from utils import load_compressed_model, load_model, predict
 
+from utils import load_compressed_model, load_model, predict
 
 BASE_DIR = Path(__file__).resolve().parent
 ORIGINAL_MODEL_PATH = BASE_DIR / "weights" / "esc50_model.pth"
@@ -122,7 +121,9 @@ def serve_uploaded_file(filename: str):
 def upload_audio():
     uploaded = request.files.get("file")
     if uploaded is None:
-        return jsonify({"error": "Missing file field. Use multipart form key 'file'."}), 400
+        return jsonify(
+            {"error": "Missing file field. Use multipart form key 'file'."}
+        ), 400
 
     filename = uploaded.filename or ""
     if not filename:
@@ -172,7 +173,7 @@ def predict_audio():
 
         result = _prediction_payload(model_choice=model_choice, source_path=source_path)
         return jsonify(result)
-    except Exception as exc:
+    except Exception as exc:  # noqa – FIXME
         return jsonify({"error": f"Error during inference: {exc}"}), 500
 
 

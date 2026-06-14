@@ -1,15 +1,15 @@
 from typing import cast
 
-import torch.nn as nn
 from custom_layers.PCAw_Pool import PCAw_Pool
 from custom_layers.SSRP_MS import SSRP_MS
 from custom_layers.WavKAN import WavKANLinear
+from torch import nn
 from typing_extensions import override
 
 
 class CNN_PCAw_SSRPMS_KAN(nn.Module):
     def __init__(self, num_classes):
-        super(CNN_PCAw_SSRPMS_KAN, self).__init__()
+        super().__init__()
 
         self.conv1 = nn.Sequential(
             nn.ZeroPad2d((0, 0, 0, 1)),
@@ -61,6 +61,6 @@ class CNN_PCAw_SSRPMS_KAN_DDD(CNN_PCAw_SSRPMS_KAN):
 
     @override
     def __init__(self, num_classes: int):
-        super(CNN_PCAw_SSRPMS_KAN_DDD, self).__init__(num_classes)
+        super().__init__(num_classes)
         old = cast(nn.Conv2d, self.conv1[1])
         self.conv1[1] = nn.Conv2d(3, old.out_channels, old.kernel_size[0])

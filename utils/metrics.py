@@ -1,17 +1,21 @@
 import time
+
 import numpy as np
 from sklearn.metrics import (
-    accuracy_score, f1_score, precision_score, recall_score,
-    classification_report, confusion_matrix
+    accuracy_score,
+    classification_report,
+    f1_score,
+    precision_score,
+    recall_score,
 )
 
 
-def classification_metrics(y_true, y_pred, average='macro'):
+def classification_metrics(y_true, y_pred, average="macro"):
     return {
-        'acc': accuracy_score(y_true, y_pred),
-        'f1':  f1_score(y_true, y_pred, average=average, zero_division=0),
-        'precision': precision_score(y_true, y_pred, average=average, zero_division=0),
-        'recall':    recall_score(y_true, y_pred, average=average, zero_division=0),
+        "acc": accuracy_score(y_true, y_pred),
+        "f1": f1_score(y_true, y_pred, average=average, zero_division=0),
+        "precision": precision_score(y_true, y_pred, average=average, zero_division=0),
+        "recall": recall_score(y_true, y_pred, average=average, zero_division=0),
     }
 
 
@@ -32,8 +36,11 @@ def inference_latency(predict_fn, sample, n=50, warmup=5):
         predict_fn(sample)
         ts.append((time.perf_counter() - t0) * 1000)
     ts = np.array(ts)
-    return {'mean_ms': ts.mean(), 'p50_ms': np.percentile(ts, 50),
-            'p95_ms': np.percentile(ts, 95)}
+    return {
+        "mean_ms": ts.mean(),
+        "p50_ms": np.percentile(ts, 50),
+        "p95_ms": np.percentile(ts, 95),
+    }
 
 
 def count_params(model):
@@ -41,5 +48,6 @@ def count_params(model):
 
 
 def report_text(y_true, y_pred, class_names=None):
-    return classification_report(y_true, y_pred, target_names=class_names,
-                                  zero_division=0)
+    return classification_report(
+        y_true, y_pred, target_names=class_names, zero_division=0
+    )

@@ -1,10 +1,10 @@
 import torch
 import torch.nn.functional as F
-
-from model import CNN_PCAw_SSRPMS_KAN
 from classes import ESC50_CLASSES
 from compression.pruning import apply_structural_pruning
-from compression.qat import prepare_qat_model, convert_qat_model
+from compression.qat import convert_qat_model, prepare_qat_model
+from model import CNN_PCAw_SSRPMS_KAN
+
 
 def load_model(model_path: str, device: torch.device, num_classes: int):
     model = CNN_PCAw_SSRPMS_KAN(num_classes=num_classes)
@@ -21,7 +21,10 @@ def load_model(model_path: str, device: torch.device, num_classes: int):
     model.eval()
     return model
 
-def load_compressed_model(model_path: str, compressed_model_path: str, num_classes: int):
+
+def load_compressed_model(
+    model_path: str, compressed_model_path: str, num_classes: int
+):
     model = CNN_PCAw_SSRPMS_KAN(num_classes=num_classes)
 
     original_checkpoint = torch.load(model_path, map_location="cpu")
@@ -39,6 +42,7 @@ def load_compressed_model(model_path: str, compressed_model_path: str, num_class
     model.to("cpu")
     model.eval()
     return model
+
 
 @torch.no_grad()
 def predict(model, input_tensor: torch.Tensor, device: torch.device):

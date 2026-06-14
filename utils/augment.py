@@ -62,8 +62,8 @@ def random_augment(y, sr=SR, p=0.5):
 import random
 
 import torch
-import torch.nn as nn
 import torchaudio.transforms as T
+from torch import nn
 
 
 # =====================================================================

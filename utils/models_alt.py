@@ -1,7 +1,7 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from kan import KAN
+from torch import nn
 
 from __main__ import LogMelFrontend, PCAPooling2D, SparseSalientRegionPooling
 

@@ -1,8 +1,8 @@
 """Waveform- and spectrogram-level augmentations per FSC22 training spec."""
 
 import torch
-import torch.nn as nn
 import torchaudio.transforms as T
+from torch import nn
 
 
 # ---------------------------------------------------------------------
@@ -34,24 +34,20 @@ class WaveformAugment(nn.Module):
         # cached. Building PitchShift/Resample per-sample allocates large FFT /
         # sinc buffers every call -> the RAM spike. Cache eliminates the churn.
         lo, hi = pitch_semitone_range
-        self._pitch_shifters = nn.ModuleDict(
-            {
-                str(s): T.PitchShift(sample_rate, n_steps=s)
-                for s in range(int(lo), int(hi) + 1)
-                if s != 0
-            }
-        )
+        self._pitch_shifters = nn.ModuleDict({
+            str(s): T.PitchShift(sample_rate, n_steps=s)
+            for s in range(int(lo), int(hi) + 1)
+            if s != 0
+        })
         slo, shi = stretch_range
         rates = [
             round(r, 2) for r in (slo, (slo + shi) / 2, shi) if abs(r - 1.0) > 1e-3
         ]
         # ModuleDict keys can't contain "." -> use index keys "0","1",...
-        self._resamplers = nn.ModuleDict(
-            {
-                str(i): T.Resample(sample_rate, int(sample_rate * r))
-                for i, r in enumerate(rates)
-            }
-        )
+        self._resamplers = nn.ModuleDict({
+            str(i): T.Resample(sample_rate, int(sample_rate * r))
+            for i, r in enumerate(rates)
+        })
 
     def _roll(self) -> bool:
         return torch.rand(1).item() < self.p
@@ -103,12 +99,12 @@ class SpecAugment(nn.Module):
 
     def __init__(self, freq_mask=8, time_mask=40, n_freq_masks=2, n_time_masks=2):
         super().__init__()
-        self.freq_masks = nn.ModuleList(
-            [T.FrequencyMasking(freq_mask) for _ in range(n_freq_masks)]
-        )
-        self.time_masks = nn.ModuleList(
-            [T.TimeMasking(time_mask) for _ in range(n_time_masks)]
-        )
+        self.freq_masks = nn.ModuleList([
+            T.FrequencyMasking(freq_mask) for _ in range(n_freq_masks)
+        ])
+        self.time_masks = nn.ModuleList([
+            T.TimeMasking(time_mask) for _ in range(n_time_masks)
+        ])
 
     def forward(self, spec: torch.Tensor) -> torch.Tensor:
         for m in self.freq_masks:

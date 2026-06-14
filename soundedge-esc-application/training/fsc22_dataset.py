@@ -7,7 +7,6 @@ import os
 from dataclasses import asdict, dataclass
 
 import torch
-import torch.nn as nn
 import torchaudio.functional as AF
 import torchaudio.transforms as TT
 
@@ -22,6 +21,7 @@ from preprocessing import (
     load_audio_with_soundfile,
     resample_if_needed,
 )
+from torch import nn
 from torch.utils.data import Dataset
 from typing_extensions import override
 
@@ -60,6 +60,9 @@ class MelConfig:
         return f"sr{self.sample_rate}_fft{self.n_fft}_hop{self.hop_length}_mel{self.n_mels}"
 
 
+DEFAULT_MEL_CONFIG = MelConfig()
+
+
 def add_derivatives(feat: torch.Tensor, win_length: int = 5) -> torch.Tensor:
     """Per-sample delta + delta-delta stacked as channels.
     feat [1, F, T] -> [3, F, T]. Deltas computed along the time axis."""
@@ -89,7 +92,7 @@ def pad_only(waveform: torch.Tensor, target: int = TARGET_NUM_SAMPLES) -> torch.
     return waveform
 
 
-def build_mel_db(cfg: MelConfig = MelConfig()):
+def build_mel_db(cfg: MelConfig = DEFAULT_MEL_CONFIG):
     """MelSpectrogram -> AmplitudeToDB (no normalization). For stats + features."""
     return nn.Sequential(
         TT.MelSpectrogram(
@@ -180,7 +183,7 @@ class FSC22Dataset(Dataset):
         specaug_order: str = "after",
         channel_norm: str = "none",
         chan_norm: NormalizePerChannel | None = None,
-        mel_cfg: MelConfig = MelConfig(),
+        mel_cfg: MelConfig = DEFAULT_MEL_CONFIG,
         cache_dir: str | None = None,
         aug_variants: int = 1,
     ):
@@ -205,7 +208,12 @@ class FSC22Dataset(Dataset):
         #                        with zero runtime aug cost. spec_aug stays live.
         self.aug_variants = max(1, int(aug_variants))
         self.cache_subdir = ensure_mel_cache(cache_dir, mel_cfg) if cache_dir else None
-        if self.cache_subdir and train and wave_aug is not None and self.aug_variants <= 1:
+        if (
+            self.cache_subdir
+            and train
+            and wave_aug is not None
+            and self.aug_variants <= 1
+        ):
             log.warning(
                 "mel cache ON (aug_variants=1) -> waveform augment BYPASSED "
                 "(pre-mel, incompatible with cached mel). SpecAugment still active. "
@@ -317,13 +325,14 @@ def precompute_mel_cache(
     csv_path,
     audio_dir,
     cache_dir: str,
-    mel_cfg: MelConfig = MelConfig(),
+    mel_cfg: MelConfig = DEFAULT_MEL_CONFIG,
     folds=None,
     wave_aug=None,
     aug_variants: int = 1,
     aug_folds=None,
 ) -> int:
-    """Warm the raw-dB mel cache for every clip (all folds unless `folds` given),
+    """
+    Warm the raw-dB mel cache for every clip (all folds unless `folds` given),
     single pass. Skips clips already cached, so it's resumable and idempotent.
 
     Every clip gets variant 0 (clean mel). Clips whose fold is in `aug_folds`
@@ -331,7 +340,8 @@ def precompute_mel_cache(
     (offline static augmentation). `aug_folds` should be the TRAIN folds only —
     val/test must stay clean. No-op extra variants if wave_aug is None.
 
-    Returns the number of mel tensors written this call (clean + aug)."""
+    Returns the number of mel tensors written this call (clean + aug).
+    """
     sub = ensure_mel_cache(cache_dir, mel_cfg)
     mel_db = build_mel_db(mel_cfg)
     rows = _read_rows(csv_path)
@@ -383,13 +393,15 @@ def compute_train_stats(
     train_folds,
     stats_out: str,
     derivatives=False,
-    mel_cfg: MelConfig = MelConfig(),
+    mel_cfg: MelConfig = DEFAULT_MEL_CONFIG,
 ):
-    """Streams train folds, computes mel-dB mean/std, writes JSON.
+    """
+    Streams train folds, computes mel-dB mean/std, writes JSON.
 
     derivatives=True -> also accumulate per-channel stats for the raw-dB
     delta and delta-delta channels (matching the "dataset" channel_norm path),
-    written as `means`/`stds` length-3 arrays alongside the base `mean`/`std`."""
+    written as `means`/`stds` length-3 arrays alongside the base `mean`/`std`.
+    """
     folds = {str(f) for f in train_folds}
     rows = [r for r in _read_rows(csv_path) if r["fold"] in folds]
     mel_db = build_mel_db(mel_cfg)

@@ -1,14 +1,15 @@
 import math
+from itertools import pairwise
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from .wavelets import DoGW, mexican_hat, meyer, morlet, shannon, unknown
 
 
 class WavKANLinear(nn.Module):
     def __init__(self, in_features, out_features, wavelet_type="dog"):
-        super(WavKANLinear, self).__init__()
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.wavelet_type = wavelet_type
@@ -62,10 +63,10 @@ class WavKANLinear(nn.Module):
 
 class WavKAN(nn.Module):
     def __init__(self, layers_hidden, wavelet_type="dog"):
-        super(WavKAN, self).__init__()
+        super().__init__()
         self.layers = nn.ModuleList()
         self.dropout = nn.Dropout(0.5)
-        for in_features, out_features in zip(layers_hidden[:-1], layers_hidden[1:]):
+        for in_features, out_features in pairwise(layers_hidden):
             self.layers.append(WavKANLinear(in_features, out_features, wavelet_type))
 
     def forward(self, x):

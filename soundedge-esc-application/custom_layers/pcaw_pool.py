@@ -1,10 +1,9 @@
 from collections.abc import Callable
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from jaxtyping import Float
-from torch import Tensor
+from torch import Tensor, nn
 
 from .eigen import basis_optimized, basis_svd
 
