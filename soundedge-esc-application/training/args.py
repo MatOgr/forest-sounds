@@ -11,9 +11,9 @@ MODEL_VARIANTS = Literal[
 ]
 
 OPTIMIZERS = Literal[
-    "adamw",   # default; lr 1e-3
-    "sgd",     # Nesterov momentum; lr ~1e-2
-    "lbfgs",   # 2nd-order, closure-based; lr ~1e-1, no AMP/accum/mixup-determinism
+    "adamw",  # default; lr 1e-3
+    "sgd",  # Nesterov momentum; lr ~1e-2
+    "lbfgs",  # 2nd-order, closure-based; lr ~1e-1, no AMP/accum/mixup-determinism
     "sophia",  # SophiaG; needs `pip install sophia-optimizer`; lr ~2e-4
 ]
 
@@ -114,29 +114,37 @@ class TrainArgs(DataclassArgs):
     )
     sample_rate: int = field(
         default=44100,
-        metadata={"help": "target SR; clips resampled to this. num_samples "
-        "= sample_rate * 5 s, so input length tracks SR automatically."},
+        metadata={
+            "help": "target SR; clips resampled to this. num_samples "
+            "= sample_rate * 5 s, so input length tracks SR automatically."
+        },
     )
     n_fft: int = field(default=1024, metadata={"help": "STFT window size"})
     hop_length: int = field(default=512, metadata={"help": "STFT hop"})
     n_mels: int = field(default=40, metadata={"help": "mel bins (freq dim)"})
     mel_cache_dir: str = field(
         default="",
-        metadata={"help": "dir for raw-dB mel disk cache (empty=off). Reused "
-        "across runs with matching mel specs; subdir keyed by sr/n_fft/hop/"
-        "n_mels. NOTE: enabling it bypasses waveform augment (pre-mel)."},
+        metadata={
+            "help": "dir for raw-dB mel disk cache (empty=off). Reused "
+            "across runs with matching mel specs; subdir keyed by sr/n_fft/hop/"
+            "n_mels. NOTE: enabling it bypasses waveform augment (pre-mel)."
+        },
     )
     precompute_mel_cache: bool = field(
         default=False,
-        metadata={"help": "warm the mel cache (all folds) before training, then "
-        "train. Needs --mel-cache-dir."},
+        metadata={
+            "help": "warm the mel cache (all folds) before training, then "
+            "train. Needs --mel-cache-dir."
+        },
     )
     aug_variants: int = field(
         default=1,
-        metadata={"help": "offline static wave-aug: cache K frozen mels/clip "
-        "(variant 0 clean + K-1 wave-aug copies); train picks one at random per "
-        "access. Keeps wave-aug under --mel-cache-dir at K-way diversity instead "
-        "of bypassed. 1=off. Needs --mel-cache-dir."},
+        metadata={
+            "help": "offline static wave-aug: cache K frozen mels/clip "
+            "(variant 0 clean + K-1 wave-aug copies); train picks one at random per "
+            "access. Keeps wave-aug under --mel-cache-dir at K-way diversity instead "
+            "of bypassed. 1=off. Needs --mel-cache-dir."
+        },
     )
     batch_size: int = 4  # PCAw SVD is VRAM-heavy
     accum_steps: int = 8  # 4*8 = effective batch 32
@@ -144,20 +152,22 @@ class TrainArgs(DataclassArgs):
     weight_decay: float = 1e-4
     optimizer: OPTIMIZERS = field(
         default="adamw",
-        metadata={"help": "optimizer: adamw (lr~1e-3), sgd (Nesterov, lr~1e-2), "
-        "lbfgs (2nd-order closure; forces AMP/accum off, lr~1e-1), sophia "
-        "(SophiaG, needs sophia-optimizer pkg, lr~2e-4). Tune --lr per choice."},
+        metadata={
+            "help": "optimizer: adamw (lr~1e-3), sgd (Nesterov, lr~1e-2), "
+            "lbfgs (2nd-order closure; forces AMP/accum off, lr~1e-1), sophia "
+            "(SophiaG, needs sophia-optimizer pkg, lr~2e-4). Tune --lr per choice."
+        },
     )
     kan_lr_scale: float = field(
         default=1.0,
-        metadata={"help": "lr multiplier for the WavKAN head's param group "
-        "(adamw/sgd only). 1.0=single group (no split). <1 trains the kan "
-        "slower than conv+fc; kan also gets weight_decay=0. Sweep this before "
-        "committing to a true two-optimizer split."},
+        metadata={
+            "help": "lr multiplier for the WavKAN head's param group "
+            "(adamw/sgd only). 1.0=single group (no split). <1 trains the kan "
+            "slower than conv+fc; kan also gets weight_decay=0. Sweep this before "
+            "committing to a true two-optimizer split."
+        },
     )
-    momentum: float = field(
-        default=0.9, metadata={"help": "SGD momentum"}
-    )
+    momentum: float = field(default=0.9, metadata={"help": "SGD momentum"})
     nesterov: bool = field(
         default=False, metadata={"help": "SGD: enable Nesterov momentum"}
     )
@@ -167,9 +177,7 @@ class TrainArgs(DataclassArgs):
     lbfgs_max_iter: int = field(
         default=20, metadata={"help": "LBFGS max iterations per .step()"}
     )
-    lbfgs_history: int = field(
-        default=100, metadata={"help": "LBFGS history size"}
-    )
+    lbfgs_history: int = field(default=100, metadata={"help": "LBFGS history size"})
     mixup_alpha: float = 0.2
     patience: int = 100
     amp: bool = field(default=False, metadata={"help": "mixed precision (cuda only)"})

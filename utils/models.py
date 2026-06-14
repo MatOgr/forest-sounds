@@ -1,8 +1,8 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio.transforms as T
 from efficient_kan import KAN
+from torch import nn
 
 
 # ==========================================
@@ -52,7 +52,7 @@ class PCAPooling2D(nn.Module):
         self.kernel_size = kernel_size
 
     def forward(self, x):
-        b, c, h, w = x.shape
+        b, c, _h, _w = x.shape
         kh = kw = self.kernel_size
 
         # Unfold the tensor into distinct sliding/non-overlapping blocks

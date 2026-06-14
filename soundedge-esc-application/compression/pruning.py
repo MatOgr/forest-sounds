@@ -1,5 +1,7 @@
 import torch
-import torch.nn as nn
+from torch import nn
+
+EXAMPLE_INPUT = torch.randn(1, 1, 40, 862)
 
 
 def _make_pruned_conv(old_conv: nn.Conv2d, keep_out_idx: torch.Tensor) -> nn.Conv2d:
@@ -70,7 +72,7 @@ def prune_conv_bn_pair(conv: nn.Conv2d, bn: nn.BatchNorm2d, amount: float = 0.3)
 
     W = conv.weight.data  # (out, in, kH, kW)
     out_ch = W.shape[0]
-    num_prune = int(round(amount * out_ch))
+    num_prune = round(amount * out_ch)
 
     if num_prune <= 0:
         keep_idx = torch.arange(out_ch, device=W.device)
@@ -185,7 +187,7 @@ def apply_asymmetric_pruning(model: nn.Module, amount: float = 0.1) -> nn.Module
 def apply_structural_pruning(
     model: nn.Module,
     amount: float = 0.8,
-    example_input: torch.Tensor = torch.randn(1, 1, 40, 862),
+    example_input: torch.Tensor = EXAMPLE_INPUT,
 ) -> nn.Module:
     """
     Structural channel pruning for your CNN_PCAw_SSRPMS_KAN conv blocks.
@@ -231,7 +233,7 @@ def apply_structural_pruning(
     # ---- conv3 prune ----
     conv3_old = model.conv3[0]  # ty:ignore[not-subscriptable]
     bn3_old = model.conv3[1]  # ty:ignore[not-subscriptable]
-    conv3_new, bn3_new, keep3 = prune_conv_bn_pair(
+    conv3_new, bn3_new, _keep3 = prune_conv_bn_pair(
         conv3_old,  # ty:ignore[invalid-argument-type]
         bn3_old,  # ty:ignore[invalid-argument-type]
         amount,

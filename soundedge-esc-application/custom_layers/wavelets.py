@@ -18,7 +18,7 @@ def DoGW(X: torch.Tensor, wavelet_weights: torch.Tensor) -> torch.Tensor:
     """
     First derivative of a Gaussian distribution (localized gradient → temporal differentiator).
 
-        $$\psi(t) = -t \cdot e^{-\frac{t^2}{2}}$$
+        $$\\psi(t) = -t \\cdot e^{-\frac{t^2}{2}}$$
 
     Ignores static/continuous sounds, fires on fast quiet-loud transitionc
     Asymmetric → shifts freqs by 90°

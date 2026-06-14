@@ -19,9 +19,9 @@ import resource  # peak-RSS diagnostics (Unix only)
 
 import numpy as np
 import torch
-import torch.nn as nn
 from model import CNN_PCAw_SSRPMS_KAN, CNN_PCAw_SSRPMS_KAN_DDD
 from preprocessing import NormalizeMeanStd, NormalizePerChannel
+from torch import nn
 from torch.utils.data import DataLoader
 
 from .args import TrainArgs
@@ -152,7 +152,7 @@ def run_epoch(
                     xb, y_a, y_b, lam = x, y, None, None
                 cap: dict = {}
 
-                def closure():
+                def closure(xb=xb, y=y, y_a=y_a, y_b=y_b, lam=lam, cap=cap):
                     optimizer.zero_grad()
                     out = model(xb)
                     if y_b is None:
@@ -252,20 +252,20 @@ def build_loaders(
     log.info("STAGE: build datasets / loaders")
     DS = FSC22Dataset
     # 3-channel features only for the _DDD model; flags are inert otherwise.
-    ddd_kw = dict(
-        derivatives=args.model.endswith("_DDD"),
-        specaug_order=args.specaug_order,
-        channel_norm=args.channel_norm,
-        chan_norm=chan_norm,
-        mel_cfg=mel_cfg,
-        cache_dir=args.mel_cache_dir or None,
-    )
+    ddd_kw = {
+        "derivatives": args.model.endswith("_DDD"),
+        "specaug_order": args.specaug_order,
+        "channel_norm": args.channel_norm,
+        "chan_norm": chan_norm,
+        "mel_cfg": mel_cfg,
+        "cache_dir": args.mel_cache_dir or None,
+    }
     # Augment lives in the dataset (CPU path). wave_aug is pre-mel; spec_aug
     # post-mel. Under --mel-cache-dir, wave_aug is bypassed unless --aug-variants.
-    train_aug = dict(
-        wave_aug=WaveformAugment(sample_rate=mel_cfg.sample_rate),
-        spec_aug=SpecAugment(),
-    )
+    train_aug = {
+        "wave_aug": WaveformAugment(sample_rate=mel_cfg.sample_rate),
+        "spec_aug": SpecAugment(),
+    }
     train_ds = DS(
         args.csv,
         args.audio_dir,
@@ -289,13 +289,13 @@ def build_loaders(
         **ddd_kw,
     )
 
-    loader_kw = dict(
-        num_workers=args.num_workers,
-        pin_memory=(device_type == "cuda"),  # faster host->GPU copies
-        persistent_workers=args.num_workers > 0,  # don't respawn workers each epoch
-        prefetch_factor=4 if args.num_workers > 0 else None,
-        worker_init_fn=_worker_init if args.num_workers > 0 else None,
-    )
+    loader_kw = {
+        "num_workers": args.num_workers,
+        "pin_memory": (device_type == "cuda"),  # faster host->GPU copies
+        "persistent_workers": args.num_workers > 0,  # don't respawn workers each epoch
+        "prefetch_factor": 4 if args.num_workers > 0 else None,
+        "worker_init_fn": _worker_init if args.num_workers > 0 else None,
+    }
     # Seeded generator -> reproducible shuffle order each epoch.
     shuffle_gen = torch.Generator().manual_seed(args.seed)
     train_loader = DataLoader(
@@ -506,7 +506,7 @@ def train_model(
                 "val/acc": val_acc,
                 "lr": lr,
                 "best_val_acc": best_acc,
-            }
+            },
         )
 
         if val_acc > best_acc:

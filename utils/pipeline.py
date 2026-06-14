@@ -1,9 +1,9 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import torch.nn.utils.prune as prune
 import torchaudio
 import torchaudio.transforms as T
+from torch import nn
+from torch.nn.utils import prune
 
 
 # =====================================================================

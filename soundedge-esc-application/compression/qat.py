@@ -2,7 +2,7 @@ import copy
 
 import torch
 import torch.ao.quantization as tq
-import torch.nn as nn
+from torch import nn
 
 
 class CNN_PSK_QATWrapper(nn.Module):

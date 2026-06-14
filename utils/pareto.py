@@ -1,9 +1,9 @@
 import librosa
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.feature_selection import mutual_info_classif
+from torch import nn
 
 # =====================================================================
 # STAGE 1: FRONT-END FEATURE OPTIMIZATION (Qurthobi et al.)
@@ -53,7 +53,7 @@ def Pareto_feature_selection(X_train, y_train, target_cardinality=40):
     Objective 1: Maximize class separation (Mutual Information)
     Objective 2: Minimize feature redundancy (Cross-Correlation)
     """
-    num_features = X_train.shape[1]
+    _num_features = X_train.shape[1]
 
     # Evaluate Objective 1: Relevancy score for each feature index
     mi_scores = mutual_info_classif(X_train, y_train)
@@ -84,7 +84,7 @@ class SoftDistillationLoss(nn.Module):
     """
 
     def __init__(self, alpha: float = 0.4, temperature: float = 3.0):
-        super(SoftDistillationLoss, self).__init__()
+        super().__init__()
         self.alpha = alpha
         self.T = temperature
         self.kl_div = nn.KLDivLoss(reduction="batchmean")
