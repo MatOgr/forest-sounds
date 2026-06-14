@@ -1,5 +1,5 @@
 
-## [unreleased]
+## [0.1.0] - 2026-06-14
 
 ### 🚀 Features
 
@@ -10,3 +10,5 @@
 - Ci & changelog (#1)
 - Cleanup script (#2)
 - Update changelog [skip ci]
+- Update changelog [skip ci]
+- Release job, separated from tests (#4)
