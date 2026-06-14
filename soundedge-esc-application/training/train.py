@@ -506,7 +506,7 @@ def train_model(
                 "val/acc": val_acc,
                 "lr": lr,
                 "best_val_acc": best_acc,
-            }
+            },
         )
 
         if val_acc > best_acc:

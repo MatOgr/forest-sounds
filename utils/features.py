@@ -31,16 +31,18 @@ def extract_handcrafted(y, sr=SR, n_mfcc=N_MFCC):
     bw = librosa.feature.spectral_bandwidth(y=y, sr=sr)
     roll = librosa.feature.spectral_rolloff(y=y, sr=sr)
     chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-    return np.concatenate([
-        m.mean(1),
-        m.std(1),
-        [zcr.mean(), zcr.std()],
-        [cent.mean(), cent.std()],
-        [bw.mean(), bw.std()],
-        [roll.mean(), roll.std()],
-        chroma.mean(1),
-        chroma.std(1),
-    ]).astype(np.float32)
+    return np.concatenate(
+        [
+            m.mean(1),
+            m.std(1),
+            [zcr.mean(), zcr.std()],
+            [cent.mean(), cent.std()],
+            [bw.mean(), bw.std()],
+            [roll.mean(), roll.std()],
+            chroma.mean(1),
+            chroma.std(1),
+        ],
+    ).astype(np.float32)
 
 
 def batch_features(audios, sr=SR, fn=extract_handcrafted):

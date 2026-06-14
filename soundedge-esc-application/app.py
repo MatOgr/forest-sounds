@@ -122,7 +122,7 @@ def upload_audio():
     uploaded = request.files.get("file")
     if uploaded is None:
         return jsonify(
-            {"error": "Missing file field. Use multipart form key 'file'."}
+            {"error": "Missing file field. Use multipart form key 'file'."},
         ), 400
 
     filename = uploaded.filename or ""
@@ -141,7 +141,7 @@ def upload_audio():
             "fileId": file_id,
             "filename": filename,
             "audioUrl": f"/uploads/{stored_name}",
-        }
+        },
     )
 
 

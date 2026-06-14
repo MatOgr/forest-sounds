@@ -43,7 +43,7 @@ def mel_transform_from_stats(
     hop_length: int = 256,
     n_mels: int = 40,
 ):
-    with open(stats_path, "r", encoding="utf-8") as f:
+    with open(stats_path, encoding="utf-8") as f:
         s = json.load(f)
 
     return nn.Sequential(

@@ -62,5 +62,5 @@ class CNN_PCAw_SSRPMS_KAN_DDD(CNN_PCAw_SSRPMS_KAN):
     @override
     def __init__(self, num_classes: int):
         super().__init__(num_classes)
-        old = cast(nn.Conv2d, self.conv1[1])
+        old = cast("nn.Conv2d", self.conv1[1])
         self.conv1[1] = nn.Conv2d(3, old.out_channels, old.kernel_size[0])

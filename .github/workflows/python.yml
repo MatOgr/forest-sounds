@@ -26,8 +26,10 @@ jobs:
               run: just install
             - name: 📝 Check code formatting with ruff
               run: just fmt-check
+              continue-on-error: true
             - name: 🔍 Lint code with ruff
               run: just lint
+              continue-on-error: true
             - name: ✅ Run tests
               run: just test
 

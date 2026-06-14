@@ -5,12 +5,13 @@
 install:
     uv sync --all-extras --dev
 
-# Check formatting (no writes)
-fmt-check:
-    uv run ruff format --check . 
 # Auto-format
 fmt:
-    uv run ruff format . 
+    uv run ruff format .
+
+# check formatting (no writes)
+fmt-check:
+    uv run ruff format --check --preview .
 
 # Lint
 lint:
